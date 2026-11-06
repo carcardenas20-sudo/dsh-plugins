@@ -1,0 +1,33 @@
+{
+  "name": "dsh-traductor-cambios",
+  "version": "0.1.0",
+  "description": "Traductor de cambios para DeepSeek Harness: cada cambio de código explicado en lenguaje de negocio con nivel de riesgo",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "changelog",
+    "risk"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "author": "Carlos Cárdenas",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git",
+    "directory": "plugins/dsh-traductor-cambios"
+  }
+}

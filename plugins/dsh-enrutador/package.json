@@ -1,0 +1,33 @@
+{
+  "name": "dsh-enrutador",
+  "version": "0.1.0",
+  "description": "Enrutador por dificultad y presupuesto para DeepSeek Harness: Flash por defecto, V4 Pro solo cuando hace falta, con topes en dólares",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "model-routing",
+    "budget"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "author": "Carlos Cárdenas",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git",
+    "directory": "plugins/dsh-enrutador"
+  }
+}

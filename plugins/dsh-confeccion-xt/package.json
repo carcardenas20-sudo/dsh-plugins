@@ -1,0 +1,29 @@
+{
+  "name": "dsh-confeccion-xt",
+  "version": "0.1.0",
+  "description": "Herramientas de costos, precios y rentabilidad para confección en DeepSeek Harness",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "confeccion"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "author": "Carlos Cárdenas",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git",
+    "directory": "plugins/dsh-confeccion-xt"
+  }
+}
