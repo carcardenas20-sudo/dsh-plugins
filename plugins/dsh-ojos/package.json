@@ -1,0 +1,14 @@
+{
+  "name": "dsh-ojos",
+  "version": "0.1.0",
+  "description": "Le da ojos a los modelos que no ven imágenes (como DeepSeek-V4-Pro): DeepSeek-V4.1-Flash describe las imágenes y el modelo elegido sigue razonando",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "vision", "images"],
+  "author": "Carlos Cárdenas",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-ojos" },
+  "engines": { "node": ">=22" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
