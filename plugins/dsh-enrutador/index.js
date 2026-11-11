@@ -21,6 +21,9 @@ const SOURCE_KIND = 'enrutador'
 const DEFAULTS = {
   economico: undefined, // { provider, model }. Por defecto: el modelo que el usuario ya tenga elegido.
   fuerte: { provider: 'deepseek-official', model: 'deepseek-v4-pro' },
+  // V4-Pro no declara entrada de imágenes en dsh 0.2.2. Si la conversación tiene imágenes,
+  // no se escala a menos que indiques que el modelo fuerte sí las ve.
+  fuerteVeImagenes: false,
   erroresParaEscalar: 2,
   pasosFuertesMax: 4,
   palabrasDificiles: ['diseñ', 'arquitect', 'planea', 'refactor', 'depur', 'debug', 'bug', 'no funciona', 'falla', 'error', 'por qué', 'porque no', 'optimiz', 'seguridad', 'migra', 'rendimiento', 'race condition', 'concurrenc'],
@@ -117,7 +120,7 @@ export function apply(ctx, rawConfig) {
   function st(agent) {
     let s = agentes.get(agent)
     if (!s) {
-      s = { modo: 'economico', economico: undefined, motivo: 'inicio', erroresSeguidos: 0, pasosFuertes: 0,
+      s = { modo: 'economico', economico: undefined, motivo: 'inicio', erroresSeguidos: 0, pasosFuertes: 0, conImagenes: false,
         tarea: { usd: 0, pasos: 0, pasosFuertes: 0, avisoTope: false }, avisoDiario: undefined, ultimoCambio: undefined }
       agentes.set(agent, s)
       if (agent.session) porSesion.set(agent.session, agent)
@@ -142,6 +145,11 @@ export function apply(ctx, rawConfig) {
   function cambiar(agent, modo, motivo) {
     const s = st(agent)
     if (modo === 'fuerte' && topeDiarioAlcanzado()) modo = 'economico'
+    if (modo === 'fuerte' && s.conImagenes && !cfg.fuerteVeImagenes) {
+      s.motivo = `no escalé (${motivo}): la conversación tiene imágenes y ${cfg.fuerte.model} no las ve`
+      ctx.logger?.info?.(`enrutador: ${s.motivo}`)
+      return false
+    }
     const destino = modo === 'fuerte' ? cfg.fuerte : modeloEconomico(agent, s)
     const actual = agent.model?.current?.()
     s.modo = modo
@@ -165,6 +173,7 @@ export function apply(ctx, rawConfig) {
     try {
       const s = st(agent)
       const kind = message?.source?.kind
+      if ((message?.content ?? []).some((b) => b?.type === 'image')) s.conImagenes = true
       if (kind === 'user') {
         s.tarea = { usd: 0, pasos: 0, pasosFuertes: 0, avisoTope: false }
         s.erroresSeguidos = 0
@@ -257,7 +266,7 @@ export function apply(ctx, rawConfig) {
       const pico = esHoraPico(new Date(), cfg.horasPicoUTC)
       return [
         `Modelo actual: ${actual?.model ?? 'desconocido'} (${s?.modo ?? '—'}: ${s?.motivo ?? '—'})`,
-        `Económico: ${s ? modeloEconomico(exec.agent, s).model : '—'} · Fuerte: ${cfg.fuerte.model}`,
+        `Económico: ${s ? modeloEconomico(exec.agent, s).model : '—'} · Fuerte: ${cfg.fuerte.model}${s?.conImagenes && !cfg.fuerteVeImagenes ? ' (pausado: hay imágenes en la conversación)' : ''}`,
         `Esta tarea: ${usd(s?.tarea.usd ?? 0)} en ${s?.tarea.pasos ?? 0} pasos (${s?.tarea.pasosFuertes ?? 0} con el fuerte). Tope: ${cfg.topeTareaUSD > 0 ? usd(cfg.topeTareaUSD) : 'sin tope'}`,
         `Hoy: ${usd(diario.fecha === hoy() ? diario.usd : 0)}. Tope diario: ${cfg.topeDiarioUSD > 0 ? usd(cfg.topeDiarioUSD) : 'sin tope'}`,
         `Horario: ${pico ? 'PICO (precios ×' + cfg.multiplicadorPico + ')' : 'valle'}`,

@@ -1,6 +1,6 @@
 {
   "name": "dsh-enrutador",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Enrutador por dificultad y presupuesto para DeepSeek Harness: Flash por defecto, V4 Pro solo cuando hace falta, con topes en dólares",
   "type": "module",
   "main": "index.js",

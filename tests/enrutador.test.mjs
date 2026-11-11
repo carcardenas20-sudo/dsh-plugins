@@ -29,3 +29,18 @@ assert.ok(Math.abs(costo({ inputTokens: 1e6, outputTokens: 0 }, 'deepseek-flash'
 assert.equal(esFallo({ isError: false, value: { exitCode: 2 } }), true); assert.equal(esFallo({ isError: false, value: { exitCode: 0 } }), false)
 assert.equal(textoDificil('No FUNCIONA el login', ['no funciona']), 'no funciona')
 console.log('enrutador unit: OK')
+
+// imágenes: no escalar a un modelo que no las ve
+{
+  const h2 = {}; apply({ on: (e, f) => h2[e] = f, tools: { register() {} }, logger: {} }, {})
+  let c2 = { provider: 'deepseek-official', model: 'deepseek-flash' }
+  const a2 = { session: {}, steer() {}, model: { current: () => c2, select: s => c2 = s } }
+  h2['agent/inbox/inserted']({ agent: a2, message: { source: { kind: 'user' }, content: [{ type: 'text', text: 'mira esta captura, no funciona' }, { type: 'image' }] } })
+  assert.equal(c2.model, 'deepseek-flash', 'con imagen no escala')
+  const h3 = {}; apply({ on: (e, f) => h3[e] = f, tools: { register() {} }, logger: {} }, { fuerteVeImagenes: true })
+  let c3 = { provider: 'deepseek-official', model: 'deepseek-flash' }
+  const a3 = { session: {}, steer() {}, model: { current: () => c3, select: s => c3 = s } }
+  h3['agent/inbox/inserted']({ agent: a3, message: { source: { kind: 'user' }, content: [{ type: 'text', text: 'no funciona' }, { type: 'image' }] } })
+  assert.equal(c3.model, 'deepseek-v4-pro', 'si el fuerte ve imágenes, escala')
+  console.log('enrutador imágenes: OK')
+}
