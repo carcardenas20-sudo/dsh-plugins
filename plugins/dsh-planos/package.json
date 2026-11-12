@@ -1,0 +1,14 @@
+{
+  "name": "dsh-planos",
+  "version": "0.1.0",
+  "description": "Planos visuales dentro de DeepSeek Harness: flujos de proceso, mapa de la plataforma, arquitectura, modelo de datos y recorrido del usuario como HTML autocontenido que se abre en el panel lateral",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "render.js", "cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "diagramas", "visualizacion", "documentacion"],
+  "author": "Carlos Cárdenas",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-planos" },
+  "engines": { "node": ">=22" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

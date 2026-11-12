@@ -1,6 +1,6 @@
 # Plugins para DeepSeek Harness
 
-Seis plugins para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh), sin dependencias y probados en dsh 0.2.2.
+Siete plugins para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh), sin dependencias y probados en dsh 0.2.2.
 
 | Plugin | Para qué |
 | --- | --- |
@@ -9,6 +9,7 @@ Seis plugins para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-har
 | [dsh-traductor-cambios](plugins/dsh-traductor-cambios) | Cada cambio de código explicado para quien no programa, con riesgo 🟢🟡🔴 que el agente no puede bajar. |
 | [dsh-ojos](plugins/dsh-ojos) | Deja usar imágenes con V4 Pro: Flash las mira y le pasa a Pro una descripción detallada. |
 | [dsh-rea](plugins/dsh-rea) | Ingeniería inversa con REA usando 3 herramientas en vez de 229 (ahorra ~70.000 tokens por llamada). |
+| [dsh-planos](plugins/dsh-planos) | Planos visuales (flujos, mapa de la plataforma, arquitectura, base de datos) que se abren en el panel de dsh. |
 | [dsh-confeccion-xt](plugins/dsh-confeccion-xt) | Costos de prenda, precios de venta y rentabilidad de lotes para confección. |
 
 Los tres primeros funcionan juntos: si la Prueba de entrega falla, el Enrutador sube al modelo fuerte, y el Traductor deja el cambio explicado al final.
@@ -23,6 +24,7 @@ dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins
 dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins/dsh-traductor-cambios"
 dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins/dsh-ojos"
 dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins/dsh-rea"
+dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins/dsh-planos"
 ```
 
 Harness Desktop: desde Settings → Plugins con el mismo enlace, o pídele al agente que los instale con el administrador de plugins.
