@@ -1,0 +1,14 @@
+{
+  "name": "dsh-rea",
+  "version": "0.1.0",
+  "description": "REA (Reverse Engineer Anything) en DeepSeek Harness con tres herramientas livianas en vez de 229: busca, ejecuta y sigue el método de REA sin gastar 70.000 tokens por llamada",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "reverse-engineering", "rea", "mcp"],
+  "author": "Carlos Cárdenas",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-rea" },
+  "engines": { "node": ">=22" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
