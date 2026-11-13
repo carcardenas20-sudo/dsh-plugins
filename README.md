@@ -1,6 +1,6 @@
 # Plugins para DeepSeek Harness
 
-Ocho plugins para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh), sin dependencias y probados en dsh 0.2.2.
+Nueve plugins para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh), sin dependencias y probados en dsh 0.2.2.
 
 | Plugin | Para qué |
 | --- | --- |
@@ -11,6 +11,7 @@ Ocho plugins para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-har
 | [dsh-rea](plugins/dsh-rea) | Ingeniería inversa con REA usando 3 herramientas en vez de 229 (ahorra ~70.000 tokens por llamada). |
 | [dsh-planos](plugins/dsh-planos) | Planos visuales (flujos, mapa de la plataforma, arquitectura, base de datos) que se abren en el panel de dsh. |
 | [dsh-memoria](plugins/dsh-memoria) | Memoria de proyecto: bitácora de cada turno, memoria viva en AGENTS.md que se carga en cada conversación, herramientas para buscar y anotar, e importar conversaciones anteriores. |
+| [dsh-artefactos](plugins/dsh-artefactos) | Páginas interactivas (formularios, tablas, calculadoras, tableros, gráficos) que guardan lo que ingresas en el proyecto para que el agente lo lea. |
 | [dsh-confeccion-xt](plugins/dsh-confeccion-xt) | Costos de prenda, precios de venta y rentabilidad de lotes para confección. |
 
 Los tres primeros funcionan juntos: si la Prueba de entrega falla, el Enrutador sube al modelo fuerte, y el Traductor deja el cambio explicado al final.
@@ -27,6 +28,7 @@ dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins
 dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins/dsh-rea"
 dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins/dsh-planos"
 dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins/dsh-memoria"
+dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins/dsh-artefactos"
 ```
 
 Harness Desktop: desde Settings → Plugins con el mismo enlace, o pídele al agente que los instale con el administrador de plugins.

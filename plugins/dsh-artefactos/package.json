@@ -1,0 +1,14 @@
+{
+  "name": "dsh-artefactos",
+  "version": "0.1.0",
+  "description": "Páginas interactivas y bonitas dentro de DeepSeek Harness (formularios, tablas, calculadoras, tableros, gráficos, listas) que guardan lo que ingresas en el proyecto para que el agente lo lea",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "kit.js", "cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "artefactos", "formularios", "tableros"],
+  "author": "Carlos Cárdenas",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-artefactos" },
+  "engines": { "node": ">=22" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
