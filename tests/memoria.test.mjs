@@ -1,4 +1,4 @@
-import { apply, recortarSeguro, extraerBloque, ponerBloque, anotarEnBloque, resolverEnBloque, bloqueVacio, sinSecretos, buscarEntradas, partirEntradas, limpiarRespuestaLLM, INICIO, FIN, SECCIONES } from '../plugins/dsh-memoria/index.js'
+import { apply, elegirRecuerdos, palabrasClave, importanciaDe, recortarSeguro, extraerBloque, ponerBloque, anotarEnBloque, resolverEnBloque, bloqueVacio, sinSecretos, buscarEntradas, partirEntradas, limpiarRespuestaLLM, INICIO, FIN, SECCIONES } from '../plugins/dsh-memoria/index.js'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, writeFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -16,7 +16,7 @@ const otra = ponerBloque(conTexto + '\nFinal del usuario\n', 'chao')
 assert.equal(extraerBloque(otra), 'chao'); assert.match(otra, /Reglas mías[\s\S]*chao[\s\S]*Final del usuario/)
 
 let b = anotarEnBloque('', 'decision', 'Usar Supabase porque ya lo conocemos', '2026-11-13')
-assert.match(b, /### Decisiones\n- Usar Supabase porque ya lo conocemos _\(2026-11-13\)_/)
+assert.match(b, /### Decisiones\n- Usar Supabase porque ya lo conocemos _\(2026-11-13 · ★4\)_/)
 assert.ok(!/### Decisiones\n- \(sin datos/.test(b))
 b = anotarEnBloque(b, 'pendiente', 'Conectar la pasarela de pagos Wompi', '2026-11-13')
 b = resolverEnBloque(b, 'pasarela de pagos Wompi conectada', '2026-11-14')
@@ -37,12 +37,12 @@ const h = {}; const tools = {}; const llamadas = []
 const llm = {
   stream: (o) => { llamadas.push(o); return (async function* () {
     const actual = o.messages[0].content[0].text
-    assert.match(actual, /REGISTRO DEL ÚLTIMO TURNO/); assert.match(actual, /checkout\.js/)
+    assert.match(actual, /REGISTRO DE LOS ÚLTIMOS 1 TURNOS/); assert.match(actual, /checkout\.js/)
     yield { type: 'text-delta', text: '```markdown\n' + Object.values(SECCIONES).map((s) => `### ${s}\n- ${s === 'Decisiones' ? 'Checkout en una sola página (2026-11-13)' : 'x'}`).join('\n') + '\n```' }
     yield { type: 'finish', reason: { kind: 'stop' } }
   })() },
 }
-apply({ on: (e, f) => { h[e] = f }, tools: { register: (t) => { tools[t.name] = t } }, llm, workingDirectory: { ensure: async () => cwd }, logger: { warn: (m) => { throw new Error('warn inesperado: ' + m) } } }, {})
+apply({ on: (e, f) => { h[e] = f }, tools: { register: (t) => { tools[t.name] = t } }, llm, workingDirectory: { ensure: async () => cwd }, logger: { warn: (m) => { throw new Error('warn inesperado: ' + m) } } }, { consolidarCada: 1 })
 const agent = { session: { id: 'session-1234567890' }, model: { current: () => ({ provider: 'deepseek-official', model: 'deepseek-v4-pro' }) } }
 await h['agent/pre-step']({ agent }, async () => ({ kind: 'enter', messages: [{ source: { kind: 'user' }, content: [{ type: 'text', text: 'Haz el checkout en una sola página, la clave es sk-live-abcdefghijklmnopqrstu' }] }] }))
 h['agent/assistant-stream']({ agent, frame: { type: 'start', attemptId: 'a1', turn: 1, step: 1 } })
@@ -81,7 +81,7 @@ assert.match(await tools.memoria_buscar.execute({ consulta: 'kubernetes' }, exec
 // si el LLM responde basura, la memoria no se toca
 const antes = await readFile(path.join(cwd, 'AGENTS.md'), 'utf8')
 const h2 = {}; const avisos = []
-apply({ on: (e, f) => { h2[e] = f }, tools: { register() {} }, llm: { stream: () => (async function* () { yield { type: 'text-delta', text: 'no sé' }; yield { type: 'finish', reason: { kind: 'stop' } } })() }, workingDirectory: { ensure: async () => cwd }, logger: { warn: (m) => avisos.push(m) } }, {})
+apply({ on: (e, f) => { h2[e] = f }, tools: { register() {} }, llm: { stream: () => (async function* () { yield { type: 'text-delta', text: 'no sé' }; yield { type: 'finish', reason: { kind: 'stop' } } })() }, workingDirectory: { ensure: async () => cwd }, logger: { warn: (m) => avisos.push(m) } }, { consolidarCada: 1 })
 await h2['agent/pre-step']({ agent }, async () => ({ kind: 'enter', messages: [{ source: { kind: 'user' }, content: [{ type: 'text', text: 'cambia el archivo de estilos para que el botón sea amarillo' }] }] }))
 h2['tools/result']({ agent, name: 'write', arguments: { path: 'a.css' } }, { isError: false, content: [] })
 await h2['agent/turn-stopping']({ agent, signal: new AbortController().signal })
@@ -140,7 +140,7 @@ assert.equal(await readFile(path.join(cwd, 'AGENTS.md'), 'utf8'), antes); assert
   assert.ok(r.length <= 8400, `quedó en ${r.length}`)
   assert.match(r, /PENDIENTE CRÍTICO al final/); assert.match(r, /REGLA que no se toca/)
   assert.match(r, /dato viejo número 299/, 'conserva los datos más recientes'); assert.ok(!r.includes('dato viejo número 0 '))
-  assert.match(r, /se quitaron \d+ datos antiguos por tamaño/)
+  assert.match(r, /se quitaron \d+ datos de menor importancia por tamaño/)
 }
 
 // ---- reconstruir: usa la bitácora sin duplicarla y condensa si quedó grande ----
@@ -163,5 +163,81 @@ assert.equal(await readFile(path.join(cwd, 'AGENTS.md'), 'utf8'), antes); assert
   assert.equal(await readFile(path.join(proyecto, '.dsh-memoria/bitacora/2026-10.md'), 'utf8'), bitIni, 'no duplicó la bitácora')
   const final = await readFile(path.join(proyecto, 'AGENTS.md'), 'utf8')
   assert.match(final, /- corto/); assert.ok(final.length < 12000)
+}
+// ======================= 0.3: mejoras =======================
+
+// importancia: al recortar sale primero lo menos importante, no lo más viejo
+{
+  let b = bloqueVacio()
+  b = anotarEnBloque(b, 'hecho', 'dato VIEJO pero CRÍTICO ' + 'x'.repeat(200), '2026-10-01', 5)
+  for (let i = 0; i < 40; i++) b = anotarEnBloque(b, 'hecho', `dato menor ${i} ` + 'y'.repeat(200), '2026-11-01', 2)
+  const r = recortarSeguro(b, 4000)
+  assert.match(r, /dato VIEJO pero CRÍTICO/, 'lo crítico sobrevive aunque sea viejo'); assert.ok(!r.includes('dato menor 0 '))
+  assert.equal(importanciaDe('- algo _(2026-11-01 · ★5)_'), 5); assert.equal(importanciaDe('- sin marca'), 3)
+}
+
+// elección de recuerdos
+{
+  const ents = [
+    '## 2026-11-01 10:00 · sesión aaaaaaaa\n\n**Pedido:** arreglar el login de supabase que falla con token vencido',
+    '## 2026-11-02 10:00 · sesión bbbbbbbb\n\n**Pedido:** cambiar colores del botón',
+    '## 2026-11-03 10:00 · sesión cccccccc\n\n**Acciones:**\n- edit `src/ventas/calcularTotal.js`',
+  ]
+  assert.deepEqual(palabrasClave('¿Qué hacemos con el login de Supabase?'), ['hacemos', 'login', 'supabase'])
+  const r1 = elegirRecuerdos(ents, 'otra vez falla el login de supabase')
+  assert.equal(r1.length, 1); assert.match(r1[0], /token vencido/)
+  assert.equal(elegirRecuerdos(ents, 'hola, buenos días').length, 0, 'charla no trae recuerdos')
+  assert.equal(elegirRecuerdos(ents, 'el botón').length, 0, 'una sola palabra común no basta')
+  assert.match(elegirRecuerdos(ents, 'revisa src/ventas/calcularTotal.js')[0], /calcularTotal/, 'un archivo específico sí basta')
+  assert.equal(elegirRecuerdos(ents, 'login supabase', { excluir: (e) => e.includes('aaaaaaaa') }).length, 0)
+  assert.ok(elegirRecuerdos(ents.map((e) => e + ' login supabase ' + 'z'.repeat(2000)), 'login supabase', { maxCaracteres: 1500 }).join('').length <= 1500)
+}
+
+// turnos por tandas, urgencia, recuerdo inyectado, consolidar, respaldos y deshacer
+{
+  const cwd2 = await mkdtemp(path.join(tmpdir(), 'mem03-'))
+  const hh = {}; const tt = {}; const ll = []
+  const llm = { stream: (o) => { ll.push(o.messages[0].content[0].text); const n = ll.length
+    return (async function* () { yield { type: 'text-delta', text: Object.values(SECCIONES).map((s) => `### ${s}\n- versión ${n} _(2026-11-13 · ★3)_`).join('\n') }; yield { type: 'finish', reason: { kind: 'stop' } } })() } }
+  apply({ on: (e, f) => { hh[e] = f }, tools: { register: (x) => { tt[x.name] = x } }, llm, workingDirectory: { ensure: async () => cwd2 }, logger: { warn: (m) => { throw new Error('warn: ' + m) } } }, { consolidarCada: 3 })
+  const ag = { session: { id: 'session-0000-actual1' }, model: { current: () => ({ provider: 'p', model: 'm' }) } }
+  const turno = async (txt, agente = ag) => {
+    const d = await hh['agent/pre-step']({ agent: agente, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [{ id: 'u', source: { kind: 'user' }, content: [{ type: 'text', text: txt }] }] }))
+    hh['tools/result']({ agent: agente, name: 'edit', arguments: { path: 'src/pagos.js' } }, { isError: false, content: [] })
+    await hh['agent/turn-stopping']({ agent: agente, signal: new AbortController().signal })
+    await new Promise((r) => setTimeout(r, 40))
+    return d
+  }
+  await turno('integrar la pasarela wompi en pagos'); await turno('agregar validación de montos en pagos')
+  assert.equal(ll.length, 0, 'dos turnos: todavía pendiente, sin gastar Flash')
+  assert.match(await tt.memoria_ver.execute({}, { agent: ag }), /2 turnos pendientes/)
+  await turno('conectar webhook de confirmación')
+  assert.equal(ll.length, 1, 'al tercer turno resume una sola vez'); assert.match(ll[0], /REGISTRO DE LOS ÚLTIMOS 3 TURNOS[\s\S]*wompi[\s\S]*webhook/)
+  assert.equal(await readFile(path.join(cwd2, '.dsh-memoria/pendiente.md'), 'utf8'), '', 'pendiente vaciado')
+  await turno('recuerda que siempre usamos pesos colombianos sin decimales')
+  assert.equal(ll.length, 2, '"recuerda" resume de inmediato')
+  // recuerdo automático en una conversación NUEVA
+  const otro = { session: { id: 'session-9999-otra0001' }, model: ag.model }
+  const d = await hh['agent/pre-step']({ agent: otro, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [{ id: 'u2', source: { kind: 'user' }, content: [{ type: 'text', text: '¿cómo quedó la pasarela wompi en pagos?' }] }] }))
+  assert.equal(d.messages.length, 2); assert.equal(d.messages[0].source.kind, 'dsh-memoria'); assert.equal(d.messages[0].source.form, 'recall')
+  assert.match(d.messages[0].content[0].text, /Recuerdos de conversaciones anteriores[\s\S]*wompi/); assert.equal(d.messages[1].id, 'u2')
+  assert.ok(Object.isFrozen(d.messages[0]))
+  const d2 = await hh['agent/pre-step']({ agent: otro, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [{ id: 'u3', source: { kind: 'user' }, content: [{ type: 'text', text: 'y la pasarela wompi en pagos otra vez' }] }] }))
+  assert.equal(d2.messages.length, 1, 'no repite el mismo recuerdo en la misma conversación')
+  const d3 = await hh['agent/pre-step']({ agent: ag, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [{ id: 'u4', source: { kind: 'user' }, content: [{ type: 'text', text: 'la pasarela wompi en pagos' }] }] }))
+  assert.equal(d3.messages.length, 1, 'no recuerda lo de la misma conversación (ya está en contexto)')
+  // consolidar a mano
+  await turno('ajustar textos del recibo de pago')
+  assert.match(await tt.memoria_consolidar.execute({}, { agent: ag }), /Resumí 1 turnos/)
+  assert.match(await tt.memoria_consolidar.execute({}, { agent: ag }), /No había/)
+  // respaldos y deshacer
+  const antes = await tt.memoria_ver.execute({}, { agent: ag }); assert.match(antes, /versión 3/)
+  assert.match(await tt.memoria_deshacer.execute({ listar: true }, { agent: ag }), /1\. .*\n2\./)
+  assert.match(await tt.memoria_deshacer.execute({}, { agent: ag }), /volvió a la copia 1/)
+  assert.match(await tt.memoria_ver.execute({}, { agent: ag }), /versión 2/)
+  assert.match(await tt.memoria_deshacer.execute({ pasos: 2 }, { agent: ag }), /copia 2/)
+  assert.match(await tt.memoria_ver.execute({}, { agent: ag }), /versión 1/)
+  const archivos = await readdir(path.join(cwd2, '.dsh-memoria/respaldos'))
+  assert.ok(archivos.some((x) => x.includes('-antes-de-deshacer')))
 }
 console.log('memoria unit: OK')

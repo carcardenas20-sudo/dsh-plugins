@@ -4,21 +4,25 @@ Memoria de proyecto para DeepSeek Harness. El agente recuerda el proyecto entre 
 
 ## Cómo funciona
 
-Tres capas, todas como archivos de texto dentro del proyecto (puedes leerlos y editarlos):
+Todo vive como archivos de texto dentro del proyecto (puedes leerlos y editarlos):
 
 1. **Bitácora detallada** (`.dsh-memoria/bitacora/AAAA-MM.md`). Al cerrar cada turno se anota sola, sin gastar tokens: lo que pediste, lo que respondió el agente, los archivos que tocó y los comandos que corrió (con sus errores).
-2. **Memoria viva** (un bloque dentro de `AGENTS.md`). Harness lee `AGENTS.md` solo al abrir cada conversación nueva, así que el agente arranca sabiendo todo. Tiene siete secciones: qué es el proyecto, stack y estructura, decisiones (con su porqué y fecha), reglas y preferencias, estado actual, pendientes y datos importantes. Cuando un turno hace trabajo real, DeepSeek-V4.1-Flash la actualiza en segundo plano (es barato y no te hace esperar).
-3. **Herramientas para el agente**:
-   - `memoria_buscar`: busca en toda la bitácora ("¿cómo arreglamos el login?", "¿qué archivo tenía los precios?").
-   - `memoria_anotar`: guarda al instante una decisión, regla, pendiente o pendiente resuelto. Se usa cuando dices "recuerda que…".
-   - `memoria_ver`: muestra la memoria viva actual.
-   - `memoria_importar`: recupera la memoria de un proyecto que ya venías trabajando (ver abajo).
+2. **Memoria viva** (un bloque dentro de `AGENTS.md`). Harness lee `AGENTS.md` al abrir cada conversación, así que el agente arranca sabiendo todo. Siete secciones: qué es el proyecto, stack y estructura, decisiones, reglas y preferencias, estado actual, pendientes y datos importantes. Cada dato lleva fecha e **importancia** (★1 a ★5).
+3. **Resumen por tandas.** Los turnos con trabajo quedan pendientes y DeepSeek-V4.1-Flash los resume juntos cada 5 (o antes si lo pendiente es largo o lleva 12 horas). Si dices "recuerda…", tomas una decisión o defines una regla, se resume de inmediato. Gasta mucho menos que resumir cada turno.
+4. **Recuerdo automático.** En cada mensaje tuyo, el plugin busca en la bitácora lo relacionado de conversaciones anteriores y se lo pasa al agente (máximo ~1.500 caracteres), sin que tenga que acordarse de buscar. No aparece en el chat, no repite lo mismo dos veces en una conversación y no trae lo que ya está en la conversación actual.
+5. **Copias de seguridad.** Antes de cada cambio a la memoria se guarda una copia (`.dsh-memoria/respaldos/`, las últimas 30). Si algo queda mal, se vuelve atrás.
 
-Protecciones:
-- Lo que tú escribas en `AGENTS.md` fuera del bloque no se toca nunca.
-- Claves, tokens y contraseñas se ocultan antes de guardar cualquier cosa.
-- Si Flash responde algo raro o la memoria nueva sale mucho más corta que la anterior, se deja la anterior.
-- Si Flash falla, la bitácora se guarda igual.
+Herramientas para el agente:
+- `memoria_buscar`: busca cualquier detalle en toda la bitácora.
+- `memoria_anotar`: guarda al instante una decisión, regla, pendiente o pendiente resuelto, con su importancia.
+- `memoria_ver`: muestra la memoria, cuántos turnos esperan resumen y cuántas copias hay.
+- `memoria_consolidar`: resume ya lo pendiente (por ejemplo, al cerrar una tarea grande).
+- `memoria_deshacer`: vuelve a una copia anterior (`listar: true` para ver las copias).
+- `memoria_importar`: recupera la memoria de un proyecto que ya venías trabajando (ver abajo).
+
+Si la memoria se llena: primero Flash la condensa sin perder decisiones, reglas ni pendientes; si aún así pasa el tope, se quitan los datos de **menor importancia** de las secciones no críticas (siguen en la bitácora). Nunca se corta el final.
+
+Protecciones: lo que escribas en `AGENTS.md` fuera del bloque no se toca; claves, tokens y contraseñas se ocultan antes de guardar; si Flash responde algo raro, la memoria queda como estaba.
 
 ## Instalar
 
@@ -53,7 +57,11 @@ Se puede repetir sin duplicar: solo agrega lo nuevo. Con `reconstruir: true` reh
 
 | Clave | Por defecto | Qué hace |
 | --- | --- | --- |
-| `consolidar` | `true` | Actualizar la memoria viva con Flash al cerrar turnos con trabajo. |
+| `consolidar` | `true` | Actualizar la memoria viva con Flash. |
+| `consolidarCada` | `5` | Turnos con trabajo antes de resumir. |
+| `recuerdo` | `true` | Recuerdo automático en cada mensaje. |
+| `recuerdoMax` | `1500` | Caracteres máximos del recuerdo. |
+| `respaldos` | `30` | Copias de seguridad que se guardan. |
 | `modelo.model` | `deepseek-flash` | Modelo que actualiza la memoria. |
 | `archivoMemoria` | `AGENTS.md` | Archivo donde vive el bloque de memoria. |
 | `carpeta` | `.dsh-memoria` | Carpeta de la bitácora. |
@@ -61,4 +69,4 @@ Se puede repetir sin duplicar: solo agrega lo nuevo. Con `reconstruir: true` reh
 | `limiteDuro` | `48000` | Tope absoluto. Si se alcanza, se quitan los datos más antiguos de las secciones menos críticas (siguen en la bitácora); nunca se corta el final. |
 | `dshHome` | `DSH_HOME` o `~/.dsh` | Dónde busca `memoria_importar` las conversaciones guardadas. |
 
-Probado en dsh 0.2.2: un turno creó un archivo, la bitácora y la memoria se escribieron solas, una conversación nueva en el mismo proyecto recibió la memoria desde el primer mensaje, y `memoria_importar` recuperó 15 turnos de 2 conversaciones guardadas por dsh.
+Probado en dsh 0.2.2: el recuerdo automático llegó al modelo en una conversación nueva sin aparecer en el chat; un turno creó un archivo, la bitácora y la memoria se escribieron solas, una conversación nueva en el mismo proyecto recibió la memoria desde el primer mensaje, y `memoria_importar` recuperó 15 turnos de 2 conversaciones guardadas por dsh.
