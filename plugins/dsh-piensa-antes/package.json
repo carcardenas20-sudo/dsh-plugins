@@ -1,0 +1,14 @@
+{
+  "name": "dsh-piensa-antes",
+  "version": "0.1.0",
+  "description": "Piensa antes para DeepSeek Harness: en tareas grandes obliga a planear (pasos, riesgos, pruebas) antes de editar y un arquitecto (V4-Pro) revisa el plan",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "planificacion", "razonamiento", "calidad"],
+  "author": "Carlos Cárdenas",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-piensa-antes" },
+  "engines": { "node": ">=22" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
