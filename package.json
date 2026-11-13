@@ -4,7 +4,7 @@
   "description": "Plugins para DeepSeek Harness",
   "type": "module",
   "scripts": {
-    "test": "node tests/prueba-entrega.test.mjs && node tests/enrutador.test.mjs && node tests/traductor-cambios.test.mjs && node tests/ojos.test.mjs && node tests/rea.test.mjs && node tests/planos.test.mjs",
+    "test": "node tests/prueba-entrega.test.mjs && node tests/enrutador.test.mjs && node tests/traductor-cambios.test.mjs && node tests/ojos.test.mjs && node tests/rea.test.mjs && node tests/planos.test.mjs && node tests/memoria.test.mjs",
     "pack": "mkdir -p dist && for p in plugins/*; do (cd $p && npm pack --pack-destination ../../dist); done"
   },
   "engines": { "node": ">=22" }

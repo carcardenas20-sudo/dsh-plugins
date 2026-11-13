@@ -1,0 +1,14 @@
+{
+  "name": "dsh-memoria",
+  "version": "0.1.0",
+  "description": "Memoria de proyecto para DeepSeek Harness: bitácora detallada de cada turno, memoria viva en AGENTS.md que se carga en cada conversación y herramientas para buscar y anotar",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "memoria", "contexto", "agents-md"],
+  "author": "Carlos Cárdenas",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-memoria" },
+  "engines": { "node": ">=22" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
