@@ -87,4 +87,47 @@ h2['tools/result']({ agent, name: 'write', arguments: { path: 'a.css' } }, { isE
 await h2['agent/turn-stopping']({ agent, signal: new AbortController().signal })
 await new Promise((r) => setTimeout(r, 50))
 assert.equal(await readFile(path.join(cwd, 'AGENTS.md'), 'utf8'), antes); assert.match(avisos.join(), /formato esperado/)
+// ---- importar conversaciones anteriores (log zstd con varios frames, como lo guarda dsh) ----
+{
+  const zlib = await import('node:zlib')
+  const { mkdir: mk, writeFile: wf } = await import('node:fs/promises')
+  const home = await mkdtemp(path.join(tmpdir(), 'dshhome-'))
+  const proyecto = await mkdtemp(path.join(tmpdir(), 'proy-'))
+  await wf(path.join(proyecto, 'README.md'), '# Ventas XT\nSistema de ventas con Supabase. token=abcdef123456\n')
+  const ev = (o) => JSON.stringify(o) + '\n'
+  const frames = [
+    ev({ type: 'session', version: 4, id: 'session-vieja-1', cwd: proyecto }),
+    ev({ type: 'turn/start', time: Date.parse('2026-10-01T15:00:00Z'), data: { turn: 1 } }) +
+    ev({ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Agrega el campo descuento a la tabla ventas' }] } }) +
+    ev({ type: 'user/message', data: { source: { kind: 'plugin' }, content: [{ type: 'text', text: 'aviso interno que no va' }] } }),
+    ev({ type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'c1', name: 'edit' }] } } }) +
+    ev({ type: 'tool/call', data: { callId: 'c1', name: 'edit', arguments: '{"file_path":"db/ventas.sql"}' } }) +
+    ev({ type: 'tool/call', data: { callId: 'c2', name: 'bash', arguments: '{"command":"npm test"}' } }) +
+    ev({ type: 'tool/result', data: { message: { toolCallId: 'c2', isError: true, content: [{ type: 'text', text: 'falla migración' }] } } }) +
+    ev({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'Agregué descuento; la migración falla por un tipo.' }] } } }) +
+    ev({ type: 'turn/end', time: Date.parse('2026-10-01T15:05:00Z'), data: { turn: 1 } }),
+  ]
+  const dir = path.join(home, 'sessions', '--proy--', 'session-vieja-1')
+  await mk(dir, { recursive: true })
+  await wf(path.join(dir, 'session.v4.jsonl.zstd'), Buffer.concat(frames.map((f) => zlib.zstdCompressSync(Buffer.from(f)))))
+  // otra sesión de OTRA carpeta: no debe entrar
+  const dir2 = path.join(home, 'sessions', '--otro--', 'session-otra')
+  await mk(dir2, { recursive: true })
+  await wf(path.join(dir2, 'session.v4.jsonl'), ev({ type: 'session', id: 'session-otra', cwd: '/otro/lado' }) + ev({ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'NO DEBE APARECER' }] } }))
+
+  const t3 = {}; const pedidos = []
+  const llm3 = { stream: (o) => { pedidos.push(o.messages[0].content[0].text); return (async function* () { yield { type: 'text-delta', text: Object.values(SECCIONES).map((s) => `### ${s}\n- ok ${pedidos.length}`).join('\n') }; yield { type: 'finish', reason: { kind: 'stop' } } })() } }
+  apply({ on() {}, tools: { register: (x) => { t3[x.name] = x } }, llm: llm3, workingDirectory: { ensure: async () => proyecto }, logger: {} }, { dshHome: home })
+  const ex = { agent: { session: { id: 'session-actual' }, model: { current: () => ({ provider: 'deepseek-official', model: 'deepseek-v4-pro' }) } }, signal: new AbortController().signal }
+  const r = await t3.memoria_importar.execute({}, ex)
+  assert.match(r, /Importé 1 turnos de 1 conversaciones/); assert.match(r, /2 de 2 lotes/)
+  assert.match(pedidos[0], /DOCUMENTOS DEL PROYECTO[\s\S]*Ventas XT/); assert.ok(!pedidos[0].includes('abcdef123456'), 'oculta el token del README')
+  assert.match(pedidos[1], /HISTORIAL[\s\S]*Agrega el campo descuento[\s\S]*edit `db\/ventas\.sql`[\s\S]*bash `npm test` → ERROR: falla migración/)
+  assert.ok(!pedidos.join().includes('aviso interno') && !pedidos.join().includes('NO DEBE APARECER'))
+  const bit = await readFile(path.join(proyecto, '.dsh-memoria/bitacora/2026-10.md'), 'utf8')
+  assert.match(bit, /· importado/); assert.match(bit, /la migración falla por un tipo/)
+  assert.match(await readFile(path.join(proyecto, 'AGENTS.md'), 'utf8'), /- ok 2/)
+  const r2 = await t3.memoria_importar.execute({ documentos: false }, ex)
+  assert.match(r2, /No encontré conversaciones nuevas/, 'no duplica')
+}
 console.log('memoria unit: OK')

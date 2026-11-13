@@ -8,10 +8,13 @@
 //      pendientes. Al terminar cada turno con trabajo real, Flash lo actualiza.
 //   3. Herramientas: memoria_buscar (encuentra cualquier detalle en la bitácora),
 //      memoria_anotar (guarda al instante una decisión, regla o pendiente) y
-//      memoria_ver (muestra la memoria viva).
+//      memoria_ver (muestra la memoria viva) y memoria_importar (recupera las
+//      conversaciones anteriores de dsh y los documentos del proyecto).
 
-import { mkdir, readFile, writeFile, rename, appendFile, readdir } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, rename, appendFile, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
+import os from 'node:os'
+import zlib from 'node:zlib'
 
 export const name = 'memoria'
 export const inject = ['tools', 'llm', 'workingDirectory']
@@ -25,6 +28,10 @@ const DEFAULTS = {
   maxPedido: 4000,
   maxRespuesta: 3000,
   timeoutSegundos: 90,
+  dshHome: undefined, // carpeta de datos de dsh; por defecto DSH_HOME o ~/.dsh
+  maxDocumentos: 60000, // caracteres de documentos del proyecto que se leen al importar
+  loteImportar: 24000, // caracteres de historial por llamada a Flash al importar
+  maxLotes: 60,
 }
 
 export const INICIO = '<!-- dsh-memoria:inicio — bloque mantenido por el plugin dsh-memoria; puedes editarlo -->'
@@ -195,6 +202,112 @@ export function limpiarRespuestaLLM(t) {
   return s.slice(i).trim()
 }
 
+// ---------- importar conversaciones anteriores de dsh ----------
+
+/** Lee un log de sesión de dsh (.jsonl o .jsonl.zstd con varios frames) y devuelve sus eventos. */
+export function leerEventosSesion(buf, nombre = '') {
+  let texto
+  if (nombre.endsWith('.zstd') || (buf[0] === 0x28 && buf[1] === 0xb5 && buf[2] === 0x2f && buf[3] === 0xfd)) {
+    if (typeof zlib.zstdDecompressSync !== 'function') throw new Error('esta versión de Node no trae zstd; actualiza Node a 24 o más nuevo')
+    const magia = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
+    const pos = []
+    for (let i = buf.indexOf(magia); i >= 0; i = buf.indexOf(magia, i + 4)) pos.push(i)
+    const partes = []
+    // Un frame puede contener por casualidad los bytes mágicos: si falla, se une con el siguiente.
+    let desde = 0
+    for (let k = 1; k <= pos.length; k++) {
+      const hasta = k < pos.length ? pos[k] : buf.length
+      try { partes.push(zlib.zstdDecompressSync(buf.subarray(pos[desde], hasta)).toString('utf8')); desde = k } catch { if (k === pos.length) throw new Error('log de sesión dañado') }
+    }
+    texto = partes.join('')
+  } else texto = buf.toString('utf8')
+  const eventos = []
+  for (const l of texto.split('\n')) { if (!l.trim()) continue; try { eventos.push(JSON.parse(l)) } catch {} }
+  return eventos
+}
+
+const textoBloques = (content) => (Array.isArray(content) ? content : []).map((b) => b?.type === 'text' ? b.text : b?.type === 'image' ? '[imagen]' : '').filter(Boolean).join('\n').trim()
+
+/** Convierte los eventos de una sesión en turnos { inicio, fin, turno, pedido, acciones[], respuesta }. */
+export function turnosDeSesion(eventos) {
+  const turnos = []
+  let t = null
+  const nuevo = (ev) => ({ inicio: ev?.time, turno: undefined, pedido: [], acciones: [], respuesta: [], llamadas: new Map() })
+  for (const ev of eventos) {
+    const d = ev?.data ?? {}
+    if (ev.type === 'turn/start') { t ??= nuevo(ev); t.turno = d.turn; t.inicio ??= ev.time; continue }
+    if (ev.type === 'user/message') {
+      if (d.source?.kind !== 'user') continue
+      t ??= nuevo(ev)
+      const x = textoBloques(d.content); if (x) t.pedido.push(x)
+      continue
+    }
+    if (!t) continue
+    if (ev.type === 'assistant/message') {
+      const x = textoBloques(d.message?.content); if (x) t.respuesta.push(x)
+    } else if (ev.type === 'tool/call') {
+      let args = d.arguments
+      if (typeof args === 'string') { try { args = JSON.parse(args) } catch {} }
+      t.llamadas.set(d.callId, t.acciones.length)
+      t.acciones.push({ nombre: d.name, args, error: undefined })
+    } else if (ev.type === 'tool/result') {
+      const m = d.message ?? {}
+      const i = t.llamadas.get(m.toolCallId ?? m.source?.callId)
+      if (i !== undefined && (m.isError ?? d.isError)) t.acciones[i].error = textoBloques(m.content)
+    } else if (ev.type === 'turn/end') {
+      t.fin = ev.time; delete t.llamadas; turnos.push(t); t = null
+    }
+  }
+  if (t && (t.pedido.length || t.acciones.length)) { delete t.llamadas; turnos.push(t) }
+  return turnos
+}
+
+export function entradaDeTurno(t, sesion, cfg) {
+  const f = hoy(new Date(t.inicio ?? Date.now()))
+  const acciones = t.acciones.filter((a) => !String(a.nombre).startsWith('memoria_')).slice(0, 80)
+    .map((a) => `- ${resumenHerramienta(a.nombre, a.args, a.error ? { isError: true, content: [{ text: a.error }] } : undefined)}`)
+  return sinSecretos([
+    `## ${f} · sesión ${String(sesion).slice(-8)} · importado`,
+    t.pedido.length ? `**Pedido:**\n${corta(t.pedido.join('\n\n'), cfg.maxPedido)}` : '**Pedido:** (continuación)',
+    acciones.length ? `**Acciones:**\n${acciones.join('\n')}` : '',
+    t.respuesta.length ? `**Respuesta:**\n${corta(t.respuesta.at(-1), cfg.maxRespuesta)}` : '',
+  ].filter(Boolean).join('\n\n'))
+}
+
+const mismaRuta = (a, b) => {
+  const n = (p) => path.resolve(String(p ?? '')).replace(/[\\/]+$/, '')
+  return process.platform === 'win32' ? n(a).toLowerCase() === n(b).toLowerCase() : n(a) === n(b)
+}
+
+/** Documentos que explican el proyecto: README, docs, configuración y esquemas. */
+export async function leerDocumentos(cwd, max, archivoMemoria) {
+  const candidatos = []
+  const agregar = async (rel, limite = 15000) => {
+    try {
+      const f = path.join(cwd, rel)
+      const s = await stat(f)
+      if (!s.isFile() || s.size > 2_000_000) return
+      let x = await readFile(f, 'utf8')
+      if (rel === archivoMemoria) { const i = x.indexOf(INICIO); const j = x.indexOf(FIN); if (i >= 0 && j > i) x = x.slice(0, i) + x.slice(j + FIN.length) }
+      if (rel === 'package.json') {
+        try { const p = JSON.parse(x); x = JSON.stringify({ name: p.name, description: p.description, scripts: p.scripts, dependencies: p.dependencies, devDependencies: p.devDependencies }, null, 1) } catch {}
+      }
+      if (rel.startsWith('.env')) x = x.split('\n').map((l) => l.replace(/=.*/, '=…')).join('\n')
+      if (x.trim()) candidatos.push(`### ${rel}\n${corta(x.trim(), limite)}`)
+    } catch {}
+  }
+  for (const f of [archivoMemoria, 'CLAUDE.md', 'README.md', 'readme.md', 'README.es.md', 'LEEME.md', 'package.json', 'requirements.txt', 'pyproject.toml', 'composer.json',
+    'prisma/schema.prisma', 'schema.sql', 'database.sql', 'supabase/schema.sql', 'docker-compose.yml', 'vercel.json', 'railway.json', '.env.example']) await agregar(f)
+  for (const dir of ['docs', 'doc', 'documentacion', 'supabase/migrations', 'migrations', 'prisma/migrations', 'db']) {
+    let lista = []
+    try { lista = await readdir(path.join(cwd, dir), { recursive: true }) } catch { continue }
+    for (const f of lista.filter((x) => /\.(md|txt|sql|prisma)$/i.test(x)).sort().slice(0, 40)) await agregar(path.join(dir, f).split(path.sep).join('/'), 8000)
+  }
+  let out = ''
+  for (const c of candidatos) { if (out.length + c.length > max) break; out += `${c}\n\n` }
+  return sinSecretos(out.trim())
+}
+
 // ---------- plugin ----------
 
 export function apply(ctx, rawConfig) {
@@ -319,15 +432,16 @@ export function apply(ctx, rawConfig) {
     const sel = agent.model?.current?.()
     const provider = cfg.modelo.provider ?? sel?.provider
     if (!provider) return
-    enCola(cwd, () => consolidar(cwd, entrada, { provider, model: cfg.modelo.model }, sesion)).catch((e) => {
+    enCola(cwd, () => consolidar(cwd, `REGISTRO DEL ÚLTIMO TURNO:\n\n${entrada}`, { provider, model: cfg.modelo.model }, sesion)).catch((e) => {
       ctx.logger?.warn?.(`memoria: no pude actualizar la memoria viva: ${e?.message ?? e}`)
     })
   })
 
-  async function consolidar(cwd, entrada, sel, sessionId) {
+  async function consolidar(cwd, registro, sel, sessionId, signal) {
     const actual = (await leerBloque(cwd)) || bloqueVacio()
     const sinEncabezado = actual.includes(`### ${SECCIONES.proyecto}`) ? actual.slice(actual.indexOf(`### ${SECCIONES.proyecto}`)) : actual
     const timeout = AbortSignal.timeout(cfg.timeoutSegundos * 1000)
+    const senal = signal ? AbortSignal.any([signal, timeout]) : timeout
     const stream = ctx.llm.stream({
       provider: sel.provider,
       model: sel.model,
@@ -337,9 +451,9 @@ export function apply(ctx, rawConfig) {
         role: 'user',
         source: { kind: 'user' },
         id: globalThis.crypto.randomUUID(),
-        content: Object.freeze([{ type: 'text', text: `MEMORIA ACTUAL (máximo ${cfg.maxMemoria} caracteres al devolverla):\n\n${sinEncabezado}\n\n---\n\nREGISTRO DEL ÚLTIMO TURNO:\n\n${entrada}` }]),
+        content: Object.freeze([{ type: 'text', text: `MEMORIA ACTUAL (máximo ${cfg.maxMemoria} caracteres al devolverla):\n\n${sinEncabezado}\n\n---\n\n${registro}` }]),
       })],
-      signal: timeout,
+      signal: senal,
     })
     let texto = ''
     let fin
@@ -426,6 +540,108 @@ export function apply(ctx, rawConfig) {
   })
 
   ctx.tools.register({
+    name: 'memoria_importar',
+    description:
+      'Recupera la memoria de un proyecto que ya venía trabajándose: lee TODAS las conversaciones anteriores de dsh en esta carpeta de proyecto y sus documentos ' +
+      '(README, docs, AGENTS.md, package.json, esquemas y migraciones de base de datos), los pasa a la bitácora y arma la memoria viva con Flash, en orden cronológico. ' +
+      'Úsala una vez al instalar el plugin en un proyecto existente, o cuando el usuario pida recuperar o reconstruir la memoria. Se puede repetir: solo agrega lo nuevo. Puede tardar unos minutos.',
+    parameters: {
+      type: 'object',
+      properties: {
+        documentos: { type: 'boolean', description: 'Leer también los documentos del proyecto. Por defecto true' },
+        reconstruir: { type: 'boolean', description: 'Rehacer la memoria viva desde cero con todo el historial (por defecto false: solo agrega lo nuevo)' },
+      },
+    },
+    output: salidaTexto,
+    timeoutMs: 30 * 60 * 1000,
+    async execute(args, exec) {
+      const cwd = await cwdDe(exec.agent, exec.signal)
+      const actualId = exec.agent?.session?.id
+      const home = cfg.dshHome ?? process.env.DSH_HOME ?? path.join(os.homedir(), '.dsh')
+      const raiz = path.join(home, 'sessions')
+      const fImport = path.join(cwd, cfg.carpeta, 'importado.json')
+      let registro = {}
+      try { registro = JSON.parse(await readFile(fImport, 'utf8')) } catch {}
+      if (args?.reconstruir) registro = {}
+
+      // 1) sesiones de esta carpeta
+      const turnos = []
+      let sesionesVistas = 0
+      let carpetas = []
+      try { carpetas = await readdir(raiz) } catch { }
+      for (const c of carpetas) {
+        let ses = []
+        try { ses = (await readdir(path.join(raiz, c))).filter((x) => x.startsWith('session-')) } catch { continue }
+        for (const s of ses) {
+          if (s === actualId) continue
+          let archivos = []
+          try { archivos = (await readdir(path.join(raiz, c, s))).filter((x) => /^session\.v\d+\.jsonl(\.zstd)?$/.test(x)).sort() } catch { continue }
+          const log = archivos.at(-1)
+          if (!log) continue
+          let eventos
+          try { eventos = leerEventosSesion(await readFile(path.join(raiz, c, s, log)), log) } catch (e) { ctx.logger?.warn?.(`memoria: no pude leer ${s}: ${e?.message ?? e}`); continue }
+          const cab = eventos.find((e) => e.type === 'session')
+          if (!cab || !mismaRuta(cab.cwd, cwd)) continue
+          sesionesVistas++
+          const ya = registro[s] ?? 0
+          const ts = turnosDeSesion(eventos)
+          ts.slice(ya).forEach((t) => turnos.push({ t, s }))
+          registro[s] = ts.length
+        }
+      }
+      turnos.sort((a, b) => (a.t.inicio ?? 0) - (b.t.inicio ?? 0))
+      const entradas = turnos.map(({ t, s }) => ({ fecha: hoy(new Date(t.inicio ?? Date.now())), texto: entradaDeTurno(t, s, cfg) }))
+
+      // 2) documentos
+      const docs = args?.documentos === false ? '' : await leerDocumentos(cwd, cfg.maxDocumentos, cfg.archivoMemoria)
+      if (!entradas.length && !docs) {
+        return `No encontré conversaciones nuevas de esta carpeta (${sesionesVistas} revisadas en ${raiz}) ni documentos del proyecto. Si las conversaciones están en otra carpeta de dsh, configura "dshHome".`
+      }
+
+      // 3) bitácora
+      await enCola(cwd, async () => {
+        const porMes = new Map()
+        for (const e of entradas) { const m = e.fecha.slice(0, 7); porMes.set(m, (porMes.get(m) ?? '') + `${e.texto}\n\n`) }
+        for (const [m, txt] of porMes) { const f = path.join(dirBitacora(cwd), `${m}.md`); await mkdir(path.dirname(f), { recursive: true }); await appendFile(f, txt, 'utf8') }
+        await asegurarIgnorar(cwd)
+        await escribirAtomico(fImport, JSON.stringify(registro, null, 1))
+      })
+
+      // 4) memoria viva con Flash, por lotes: primero documentos, luego historial en orden.
+      const sel = exec.agent?.model?.current?.()
+      const provider = cfg.modelo.provider ?? sel?.provider
+      const lotes = []
+      if (docs) lotes.push(`DOCUMENTOS DEL PROYECTO (úsalos para "Qué es el proyecto", "Stack y estructura", reglas y estado):\n\n${docs}`)
+      let lote = ''
+      for (const e of entradas) {
+        if (lote && lote.length + e.texto.length > cfg.loteImportar) { lotes.push(`HISTORIAL DE CONVERSACIONES ANTERIORES (en orden cronológico; lo más reciente manda):\n\n${lote}`); lote = '' }
+        lote += `${corta(e.texto, cfg.loteImportar)}\n\n`
+      }
+      if (lote) lotes.push(`HISTORIAL DE CONVERSACIONES ANTERIORES (en orden cronológico; lo más reciente manda):\n\n${lote}`)
+      let hechos = 0; const fallos = []
+      if (provider) {
+        if (args?.reconstruir) await enCola(cwd, () => guardarBloque(cwd, bloqueVacio()))
+        const usar = lotes.length > cfg.maxLotes ? [lotes[0], ...lotes.slice(-(cfg.maxLotes - 1))] : lotes
+        for (const [k, l] of usar.entries()) {
+          if (exec.signal?.aborted) break
+          try { await enCola(cwd, () => consolidar(cwd, l, { provider, model: cfg.modelo.model }, actualId, exec.signal)); hechos++ } catch (e) { fallos.push(`lote ${k + 1}: ${e?.message ?? e}`) }
+        }
+      }
+      const b = await leerBloque(cwd)
+      return [
+        `Importé ${entradas.length} turnos de ${sesionesVistas} conversaciones anteriores de esta carpeta a la bitácora${docs ? ' y leí los documentos del proyecto' : ''}.`,
+        provider ? `Memoria viva actualizada con ${hechos} de ${lotes.length} lotes${lotes.length > cfg.maxLotes ? ` (usé el primero y los ${cfg.maxLotes - 1} más recientes)` : ''}.` : 'No pude actualizar la memoria viva: no sé qué proveedor usar.',
+        fallos.length ? `Fallos: ${fallos.join(' | ')}` : '',
+        '',
+        'Memoria viva actual:',
+        corta(b, 6000),
+        '',
+        'Muéstrale al usuario un resumen y pregúntale si algo está mal o falta, para corregirlo con memoria_anotar.',
+      ].filter((x) => x !== '').join('\n')
+    },
+  })
+
+  ctx.tools.register({
     name: 'memoria_ver',
     description: 'Muestra la memoria viva del proyecto tal como está guardada ahora (la que se carga al inicio de cada conversación).',
     parameters: { type: 'object', properties: {} },
@@ -433,7 +649,7 @@ export function apply(ctx, rawConfig) {
     async execute(_args, exec) {
       const cwd = await cwdDe(exec.agent, exec.signal)
       const b = await leerBloque(cwd)
-      return b ? `${cfg.archivoMemoria}:\n\n${b}` : `Todavía no hay memoria en ${cfg.archivoMemoria}. Se crea sola al terminar el primer turno con trabajo, o con memoria_anotar.`
+      return b ? `${cfg.archivoMemoria}:\n\n${b}` : `Todavía no hay memoria en ${cfg.archivoMemoria}. Se crea sola al terminar el primer turno con trabajo, con memoria_anotar, o recuperando las conversaciones anteriores y los documentos con memoria_importar.`
     },
   })
 }
