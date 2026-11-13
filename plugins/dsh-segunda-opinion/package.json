@@ -1,0 +1,14 @@
+{
+  "name": "dsh-segunda-opinion",
+  "version": "0.1.0",
+  "description": "Segunda opinión para DeepSeek Harness: otro modelo (V4-Pro) revisa los cambios del agente antes de entregar y lo obliga a corregir errores reales",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "revision", "code-review", "calidad"],
+  "author": "Carlos Cárdenas",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-segunda-opinion" },
+  "engines": { "node": ">=22" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
