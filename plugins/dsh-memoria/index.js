@@ -24,13 +24,14 @@ const DEFAULTS = {
   archivoMemoria: 'AGENTS.md',
   modelo: { model: 'deepseek-flash' }, // provider: por defecto el del agente
   consolidar: true, // actualizar la memoria viva con Flash al cerrar turnos con trabajo
-  maxMemoria: 12000, // caracteres máximos del bloque de memoria viva
+  maxMemoria: 24000, // tamaño objetivo del bloque de memoria viva (si lo pasa, Flash lo condensa)
+  limiteDuro: 48000, // nunca más que esto (dsh carga hasta ~64 KB de AGENTS.md)
   maxPedido: 4000,
   maxRespuesta: 3000,
   timeoutSegundos: 90,
   dshHome: undefined, // carpeta de datos de dsh; por defecto DSH_HOME o ~/.dsh
   maxDocumentos: 60000, // caracteres de documentos del proyecto que se leen al importar
-  loteImportar: 24000, // caracteres de historial por llamada a Flash al importar
+  loteImportar: 80000, // caracteres de historial por llamada a Flash al importar (Flash tiene 1M de contexto)
   maxLotes: 60,
 }
 
@@ -150,6 +151,35 @@ export function resolverEnBloque(bloque, texto, fecha) {
     bloque = bloque.slice(0, ini + h.length) + restantes.join('\n') + bloque.slice(fin)
   }
   return anotarEnBloque(bloque, 'estado', `Resuelto: ${texto}`, fecha)
+}
+
+/**
+ * Si el bloque pasa del límite duro, quita las viñetas MÁS ANTIGUAS de las secciones
+ * menos críticas (primero "Datos importantes", luego "Estado actual", luego "Stack"),
+ * nunca de Decisiones, Reglas ni Pendientes, y nunca corta el final del bloque.
+ */
+export function recortarSeguro(bloque, limite) {
+  if (bloque.length <= limite) return bloque
+  const orden = [SECCIONES.hecho, SECCIONES.estado, SECCIONES.stack, SECCIONES.proyecto]
+  let b = bloque
+  let quitadas = 0
+  for (const titulo of orden) {
+    while (b.length > limite) {
+      const h = `### ${titulo}`
+      const ini = b.indexOf(h)
+      if (ini < 0) break
+      const sig = b.indexOf('\n### ', ini + h.length)
+      const fin = sig < 0 ? b.length : sig
+      const lineas = b.slice(ini + h.length, fin).split('\n')
+      const k = lineas.findIndex((l) => l.startsWith('- ') && !l.includes('(sin datos'))
+      if (k < 0 || lineas.filter((l) => l.startsWith('- ')).length <= 1) break
+      lineas.splice(k, 1)
+      quitadas++
+      b = b.slice(0, ini + h.length) + lineas.join('\n') + b.slice(fin)
+    }
+  }
+  if (quitadas) b = anotarEnBloque(b, 'hecho', `(se quitaron ${quitadas} datos antiguos por tamaño; siguen en la bitácora, búscalos con memoria_buscar)`, new Date().toISOString().slice(0, 10))
+  return b
 }
 
 // ---------- búsqueda en la bitácora ----------
@@ -347,8 +377,21 @@ export function apply(ctx, rawConfig) {
     const f = rutaMemoria(cwd)
     const actual = await leerTexto(f)
     let b = sinSecretos(bloque)
-    if (b.length > cfg.maxMemoria * 1.5) b = b.slice(0, cfg.maxMemoria * 1.5) + '\n- (memoria recortada por tamaño)'
+    b = recortarSeguro(b, cfg.limiteDuro)
     await escribirAtomico(f, ponerBloque(actual, b))
+    return b.length
+  }
+
+  // Si la memoria pasó del tamaño objetivo, Flash la condensa sin perder decisiones, reglas ni pendientes.
+  async function compactarSiHaceFalta(cwd, sel, sessionId, signal) {
+    const b = await leerBloque(cwd)
+    if (!sel?.provider || b.length <= cfg.maxMemoria) return false
+    await consolidar(cwd, [
+      'INSTRUCCIÓN ESPECIAL: no hay turno nuevo. La memoria pasó del tamaño permitido.',
+      `Condénsala a MENOS de ${cfg.maxMemoria} caracteres SIN perder ninguna decisión vigente, regla, preferencia ni pendiente abierto:`,
+      'une viñetas repetidas, resume "Estado actual" y "Datos importantes", quita lo que quedó obsoleto o ya resuelto. No agregues nada nuevo.',
+    ].join('\n'), sel, sessionId, signal, 'compactar')
+    return true
   }
   async function asegurarIgnorar(cwd) {
     // La bitácora se guarda para ti; si usas git, decide si subirla. Creamos un README corto.
@@ -432,12 +475,13 @@ export function apply(ctx, rawConfig) {
     const sel = agent.model?.current?.()
     const provider = cfg.modelo.provider ?? sel?.provider
     if (!provider) return
-    enCola(cwd, () => consolidar(cwd, `REGISTRO DEL ÚLTIMO TURNO:\n\n${entrada}`, { provider, model: cfg.modelo.model }, sesion)).catch((e) => {
+    const selMem = { provider, model: cfg.modelo.model }
+    enCola(cwd, async () => { await consolidar(cwd, `REGISTRO DEL ÚLTIMO TURNO:\n\n${entrada}`, selMem, sesion); await compactarSiHaceFalta(cwd, selMem, sesion) }).catch((e) => {
       ctx.logger?.warn?.(`memoria: no pude actualizar la memoria viva: ${e?.message ?? e}`)
     })
   })
 
-  async function consolidar(cwd, registro, sel, sessionId, signal) {
+  async function consolidar(cwd, registro, sel, sessionId, signal, minProporcion = 0.5) {
     const actual = (await leerBloque(cwd)) || bloqueVacio()
     const sinEncabezado = actual.includes(`### ${SECCIONES.proyecto}`) ? actual.slice(actual.indexOf(`### ${SECCIONES.proyecto}`)) : actual
     const timeout = AbortSignal.timeout(cfg.timeoutSegundos * 1000)
@@ -465,7 +509,8 @@ export function apply(ctx, rawConfig) {
     const nuevo = limpiarRespuestaLLM(texto)
     if (!nuevo) throw new Error('el modelo no devolvió la memoria con el formato esperado; la dejé igual')
     // Protección: si la memoria nueva perdió más de la mitad, no confiar.
-    if (nuevo.length < sinEncabezado.length * 0.5 && sinEncabezado.length > 800) throw new Error('la memoria nueva era mucho más corta que la anterior; la dejé igual')
+    const minimo = minProporcion === 'compactar' ? Math.min(sinEncabezado.length * 0.3, cfg.maxMemoria * 0.25) : sinEncabezado.length * minProporcion
+    if (nuevo.length < minimo && sinEncabezado.length > 800) throw new Error('la memoria nueva era mucho más corta que la anterior; la dejé igual')
     // Si alguien anotó algo mientras corría el LLM, no se pierde: comparamos con lo que hay ahora.
     const ahora = (await leerBloque(cwd)) || bloqueVacio()
     let final = `${ENCABEZADO}\n\n${nuevo}`
@@ -535,6 +580,9 @@ export function apply(ctx, rawConfig) {
         await mkdir(path.dirname(f), { recursive: true })
         await appendFile(f, `## ${hoy()} · anotación\n\n**${SECCIONES[tipo] ?? 'Resuelto'}:** ${texto}\n\n`, 'utf8')
       })
+      const selA = exec.agent?.model?.current?.()
+      const provA = cfg.modelo.provider ?? selA?.provider
+      if (provA) enCola(cwd, () => compactarSiHaceFalta(cwd, { provider: provA, model: cfg.modelo.model }, exec.agent?.session?.id)).catch((e) => ctx.logger?.warn?.(`memoria: no pude condensar: ${e?.message ?? e}`))
       return `Guardado en la memoria del proyecto (${cfg.archivoMemoria} → ${tipo === 'resuelto' ? 'Estado actual' : SECCIONES[tipo] ?? SECCIONES.hecho}): ${texto}`
     },
   })
@@ -549,7 +597,7 @@ export function apply(ctx, rawConfig) {
       type: 'object',
       properties: {
         documentos: { type: 'boolean', description: 'Leer también los documentos del proyecto. Por defecto true' },
-        reconstruir: { type: 'boolean', description: 'Rehacer la memoria viva desde cero con todo el historial (por defecto false: solo agrega lo nuevo)' },
+        reconstruir: { type: 'boolean', description: 'Rehacer la memoria viva desde cero con toda la bitácora ya guardada, sin duplicarla (por defecto false: solo agrega lo nuevo). Úsalo si la memoria quedó incompleta o recortada.' },
       },
     },
     output: salidaTexto,
@@ -562,7 +610,6 @@ export function apply(ctx, rawConfig) {
       const fImport = path.join(cwd, cfg.carpeta, 'importado.json')
       let registro = {}
       try { registro = JSON.parse(await readFile(fImport, 'utf8')) } catch {}
-      if (args?.reconstruir) registro = {}
 
       // 1) sesiones de esta carpeta
       const turnos = []
@@ -594,7 +641,7 @@ export function apply(ctx, rawConfig) {
 
       // 2) documentos
       const docs = args?.documentos === false ? '' : await leerDocumentos(cwd, cfg.maxDocumentos, cfg.archivoMemoria)
-      if (!entradas.length && !docs) {
+      if (!entradas.length && !docs && !args?.reconstruir) {
         return `No encontré conversaciones nuevas de esta carpeta (${sesionesVistas} revisadas en ${raiz}) ni documentos del proyecto. Si las conversaciones están en otra carpeta de dsh, configura "dshHome".`
       }
 
@@ -612,8 +659,18 @@ export function apply(ctx, rawConfig) {
       const provider = cfg.modelo.provider ?? sel?.provider
       const lotes = []
       if (docs) lotes.push(`DOCUMENTOS DEL PROYECTO (úsalos para "Qué es el proyecto", "Stack y estructura", reglas y estado):\n\n${docs}`)
+      // Al reconstruir se usa TODA la bitácora ya guardada (sin volver a escribirla); si no, solo lo nuevo.
+      let historial = entradas.map((e) => e.texto)
+      if (args?.reconstruir) {
+        let archivos = []
+        try { archivos = (await readdir(dirBitacora(cwd))).filter((f) => /^\d{4}-\d{2}\.md$/.test(f)).sort() } catch {}
+        historial = []
+        for (const f of archivos) historial.push(...partirEntradas(await readFile(path.join(dirBitacora(cwd), f), 'utf8')))
+        historial.sort((a, b) => a.slice(3, 19).localeCompare(b.slice(3, 19)))
+      }
       let lote = ''
-      for (const e of entradas) {
+      for (const texto of historial) {
+        const e = { texto }
         if (lote && lote.length + e.texto.length > cfg.loteImportar) { lotes.push(`HISTORIAL DE CONVERSACIONES ANTERIORES (en orden cronológico; lo más reciente manda):\n\n${lote}`); lote = '' }
         lote += `${corta(e.texto, cfg.loteImportar)}\n\n`
       }
@@ -624,17 +681,19 @@ export function apply(ctx, rawConfig) {
         const usar = lotes.length > cfg.maxLotes ? [lotes[0], ...lotes.slice(-(cfg.maxLotes - 1))] : lotes
         for (const [k, l] of usar.entries()) {
           if (exec.signal?.aborted) break
+          ctx.logger?.info?.(`memoria: importando lote ${k + 1} de ${usar.length}`)
           try { await enCola(cwd, () => consolidar(cwd, l, { provider, model: cfg.modelo.model }, actualId, exec.signal)); hechos++ } catch (e) { fallos.push(`lote ${k + 1}: ${e?.message ?? e}`) }
         }
+        try { await enCola(cwd, () => compactarSiHaceFalta(cwd, { provider, model: cfg.modelo.model }, actualId, exec.signal)) } catch (e) { fallos.push(`condensar: ${e?.message ?? e}`) }
       }
       const b = await leerBloque(cwd)
       return [
-        `Importé ${entradas.length} turnos de ${sesionesVistas} conversaciones anteriores de esta carpeta a la bitácora${docs ? ' y leí los documentos del proyecto' : ''}.`,
+        `Importé ${entradas.length} turnos nuevos de ${sesionesVistas} conversaciones anteriores de esta carpeta a la bitácora${args?.reconstruir ? ` y reconstruí la memoria con los ${historial.length} turnos de la bitácora` : ''}${docs ? ' y leí los documentos del proyecto' : ''}.`,
         provider ? `Memoria viva actualizada con ${hechos} de ${lotes.length} lotes${lotes.length > cfg.maxLotes ? ` (usé el primero y los ${cfg.maxLotes - 1} más recientes)` : ''}.` : 'No pude actualizar la memoria viva: no sé qué proveedor usar.',
         fallos.length ? `Fallos: ${fallos.join(' | ')}` : '',
         '',
         'Memoria viva actual:',
-        corta(b, 6000),
+        corta(b, 12000),
         '',
         'Muéstrale al usuario un resumen y pregúntale si algo está mal o falta, para corregirlo con memoria_anotar.',
       ].filter((x) => x !== '').join('\n')

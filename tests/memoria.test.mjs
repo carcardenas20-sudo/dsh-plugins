@@ -1,4 +1,4 @@
-import { apply, extraerBloque, ponerBloque, anotarEnBloque, resolverEnBloque, bloqueVacio, sinSecretos, buscarEntradas, partirEntradas, limpiarRespuestaLLM, INICIO, FIN, SECCIONES } from '../plugins/dsh-memoria/index.js'
+import { apply, recortarSeguro, extraerBloque, ponerBloque, anotarEnBloque, resolverEnBloque, bloqueVacio, sinSecretos, buscarEntradas, partirEntradas, limpiarRespuestaLLM, INICIO, FIN, SECCIONES } from '../plugins/dsh-memoria/index.js'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, writeFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -120,7 +120,7 @@ assert.equal(await readFile(path.join(cwd, 'AGENTS.md'), 'utf8'), antes); assert
   apply({ on() {}, tools: { register: (x) => { t3[x.name] = x } }, llm: llm3, workingDirectory: { ensure: async () => proyecto }, logger: {} }, { dshHome: home })
   const ex = { agent: { session: { id: 'session-actual' }, model: { current: () => ({ provider: 'deepseek-official', model: 'deepseek-v4-pro' }) } }, signal: new AbortController().signal }
   const r = await t3.memoria_importar.execute({}, ex)
-  assert.match(r, /Importé 1 turnos de 1 conversaciones/); assert.match(r, /2 de 2 lotes/)
+  assert.match(r, /Importé 1 turnos nuevos de 1 conversaciones/); assert.match(r, /2 de 2 lotes/)
   assert.match(pedidos[0], /DOCUMENTOS DEL PROYECTO[\s\S]*Ventas XT/); assert.ok(!pedidos[0].includes('abcdef123456'), 'oculta el token del README')
   assert.match(pedidos[1], /HISTORIAL[\s\S]*Agrega el campo descuento[\s\S]*edit `db\/ventas\.sql`[\s\S]*bash `npm test` → ERROR: falla migración/)
   assert.ok(!pedidos.join().includes('aviso interno') && !pedidos.join().includes('NO DEBE APARECER'))
@@ -129,5 +129,39 @@ assert.equal(await readFile(path.join(cwd, 'AGENTS.md'), 'utf8'), antes); assert
   assert.match(await readFile(path.join(proyecto, 'AGENTS.md'), 'utf8'), /- ok 2/)
   const r2 = await t3.memoria_importar.execute({ documentos: false }, ex)
   assert.match(r2, /No encontré conversaciones nuevas/, 'no duplica')
+}
+// ---- tamaño: nunca se corta el final; se quitan datos viejos de secciones no críticas ----
+{
+  let big = bloqueVacio()
+  for (let i = 0; i < 300; i++) big = anotarEnBloque(big, 'hecho', `dato viejo número ${i} con bastante texto para ocupar espacio en la memoria`, '2026-11-01')
+  big = anotarEnBloque(big, 'pendiente', 'PENDIENTE CRÍTICO al final', '2026-11-13')
+  big = anotarEnBloque(big, 'regla', 'REGLA que no se toca', '2026-11-13')
+  const r = recortarSeguro(big, 8000)
+  assert.ok(r.length <= 8400, `quedó en ${r.length}`)
+  assert.match(r, /PENDIENTE CRÍTICO al final/); assert.match(r, /REGLA que no se toca/)
+  assert.match(r, /dato viejo número 299/, 'conserva los datos más recientes'); assert.ok(!r.includes('dato viejo número 0 '))
+  assert.match(r, /se quitaron \d+ datos antiguos por tamaño/)
+}
+
+// ---- reconstruir: usa la bitácora sin duplicarla y condensa si quedó grande ----
+{
+  const proyecto = await mkdtemp(path.join(tmpdir(), 'recon-'))
+  const { mkdir: mk, writeFile: wf } = await import('node:fs/promises')
+  await mk(path.join(proyecto, '.dsh-memoria/bitacora'), { recursive: true })
+  const bitIni = '## 2026-10-02 09:00 · sesión aaaaaaaa · importado\n\n**Pedido:** segundo\n\n## 2026-10-01 09:00 · sesión bbbbbbbb · importado\n\n**Pedido:** primero\n\n'
+  await wf(path.join(proyecto, '.dsh-memoria/bitacora/2026-10.md'), bitIni)
+  const t5 = {}; const vistos = []
+  const largo = 'x'.repeat(30000)
+  const llm5 = { stream: (o) => { const tx = o.messages[0].content[0].text; vistos.push(tx); const compactando = tx.includes('INSTRUCCIÓN ESPECIAL')
+    return (async function* () { yield { type: 'text-delta', text: Object.values(SECCIONES).map((s) => `### ${s}\n- ${compactando ? 'corto ' + 'y'.repeat(1000) : (s === 'Datos importantes' ? largo : 'ok')}`).join('\n') }; yield { type: 'finish', reason: { kind: 'stop' } } })() } }
+  apply({ on() {}, tools: { register: (x) => { t5[x.name] = x } }, llm: llm5, workingDirectory: { ensure: async () => proyecto }, logger: {} }, { dshHome: path.join(proyecto, 'no-hay') })
+  const ex = { agent: { session: { id: 's' }, model: { current: () => ({ provider: 'p', model: 'm' }) } }, signal: new AbortController().signal }
+  const r = await t5.memoria_importar.execute({ reconstruir: true, documentos: false }, ex)
+  assert.match(r, /reconstruí la memoria con los 2 turnos/)
+  assert.ok(vistos[0].indexOf('primero') < vistos[0].indexOf('segundo'), 'orden cronológico')
+  assert.ok(vistos.some((v) => v.includes('INSTRUCCIÓN ESPECIAL')), 'condensó porque pasó de 24000')
+  assert.equal(await readFile(path.join(proyecto, '.dsh-memoria/bitacora/2026-10.md'), 'utf8'), bitIni, 'no duplicó la bitácora')
+  const final = await readFile(path.join(proyecto, 'AGENTS.md'), 'utf8')
+  assert.match(final, /- corto/); assert.ok(final.length < 12000)
 }
 console.log('memoria unit: OK')

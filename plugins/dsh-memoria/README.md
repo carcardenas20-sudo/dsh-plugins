@@ -41,7 +41,7 @@ El plugin:
 2. Lee los documentos del proyecto: README, `AGENTS.md`/`CLAUDE.md`, `docs/`, `package.json`, esquemas y migraciones de base de datos y `.env.example` (solo los nombres de las variables).
 3. Arma la memoria viva con Flash, por partes y en orden cronológico, para que lo más reciente prevalezca sobre lo viejo.
 
-Se puede repetir sin duplicar: solo agrega lo nuevo. Con `reconstruir: true` rehace la memoria desde cero. Puede tardar unos minutos en proyectos con mucho historial.
+Se puede repetir sin duplicar: solo agrega lo nuevo. Con `reconstruir: true` rehace la memoria desde cero usando la bitácora ya guardada (sin volver a leer ni duplicar nada). Puede tardar unos minutos en proyectos con mucho historial.
 
 ## Consejos
 
@@ -57,7 +57,8 @@ Se puede repetir sin duplicar: solo agrega lo nuevo. Con `reconstruir: true` reh
 | `modelo.model` | `deepseek-flash` | Modelo que actualiza la memoria. |
 | `archivoMemoria` | `AGENTS.md` | Archivo donde vive el bloque de memoria. |
 | `carpeta` | `.dsh-memoria` | Carpeta de la bitácora. |
-| `maxMemoria` | `12000` | Tamaño objetivo de la memoria viva, en caracteres. |
+| `maxMemoria` | `24000` | Tamaño objetivo de la memoria viva, en caracteres. Si lo pasa, Flash la condensa sin perder decisiones, reglas ni pendientes. |
+| `limiteDuro` | `48000` | Tope absoluto. Si se alcanza, se quitan los datos más antiguos de las secciones menos críticas (siguen en la bitácora); nunca se corta el final. |
 | `dshHome` | `DSH_HOME` o `~/.dsh` | Dónde busca `memoria_importar` las conversaciones guardadas. |
 
 Probado en dsh 0.2.2: un turno creó un archivo, la bitácora y la memoria se escribieron solas, una conversación nueva en el mismo proyecto recibió la memoria desde el primer mensaje, y `memoria_importar` recuperó 15 turnos de 2 conversaciones guardadas por dsh.

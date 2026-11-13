@@ -1,6 +1,6 @@
 {
   "name": "dsh-memoria",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Memoria de proyecto para DeepSeek Harness: bitácora detallada de cada turno, memoria viva en AGENTS.md que se carga en cada conversación y herramientas para buscar y anotar",
   "type": "module",
   "main": "index.js",
