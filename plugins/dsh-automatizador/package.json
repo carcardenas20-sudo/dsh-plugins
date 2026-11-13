@@ -1,0 +1,14 @@
+{
+  "name": "dsh-automatizador",
+  "version": "0.1.0",
+  "description": "Automatizaciones profesionales en Java o Python para DeepSeek Harness: núcleo con .env, registro sin secretos, reintentos, modo prueba, sin duplicados, avisos, y listas para servidor (Docker, Fly.io) o Windows",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "plantillas", "cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "automatizacion", "java", "python", "cron", "docker"],
+  "author": "Carlos Cárdenas",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-automatizador" },
+  "engines": { "node": ">=22" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
