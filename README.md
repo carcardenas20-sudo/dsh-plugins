@@ -1,6 +1,6 @@
 # Plugins para DeepSeek Harness
 
-Doce plugins para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh), sin dependencias y probados en dsh 0.2.2.
+Trece plugins para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh), sin dependencias y probados en dsh 0.2.2.
 
 | Plugin | Para qué |
 | --- | --- |
@@ -14,6 +14,7 @@ Doce plugins para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-har
 | [dsh-artefactos](plugins/dsh-artefactos) | Páginas interactivas (formularios, tablas, calculadoras, tableros, gráficos) que guardan lo que ingresas en el proyecto para que el agente lo lea. |
 | [dsh-segunda-opinion](plugins/dsh-segunda-opinion) | Otro modelo (V4-Pro) revisa los cambios antes de entregar y obliga a corregir errores reales. |
 | [dsh-piensa-antes](plugins/dsh-piensa-antes) | En tareas grandes obliga a planear (pasos, riesgos, pruebas) antes de editar; un arquitecto (V4-Pro) revisa el plan. |
+| [dsh-lienzo](plugins/dsh-lienzo) | Páginas visuales de calidad (storyboard con maquetas de pantalla, KPIs, carriles, comparaciones) revisadas en un navegador real en escritorio y celular, con corrección obligatoria. |
 | [dsh-automatizador](plugins/dsh-automatizador) | Automatizaciones serias en Java o Python: .env, registro sin secretos, reintentos, modo prueba, sin duplicados, avisos; listas para servidor (Docker, Fly.io) o Windows. |
 | [dsh-confeccion-xt](plugins/dsh-confeccion-xt) | Costos de prenda, precios de venta y rentabilidad de lotes para confección. |
 
@@ -35,6 +36,7 @@ dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins
 dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins/dsh-segunda-opinion"
 dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins/dsh-piensa-antes"
 dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins/dsh-automatizador"
+dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins/dsh-lienzo"
 ```
 
 Harness Desktop: **solo desde la app** (Plugins → Add plugin) con el mismo enlace. No uses scripts ni la CLI sobre el perfil desktop: puede dañar la app.

@@ -1,0 +1,14 @@
+{
+  "name": "dsh-lienzo",
+  "version": "0.1.0",
+  "description": "Páginas visuales de calidad en DeepSeek Harness: kit de diseño (storyboard con maquetas de pantalla, pasos, carriles, KPIs, tablas, pestañas, modo oscuro) y revisión automática en navegador invisible que obliga a corregir lo que se ve mal",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "kit.js", "revisor.js", "cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "diseño", "storyboard", "maquetas", "html"],
+  "author": "Carlos Cárdenas",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-lienzo" },
+  "engines": { "node": ">=22" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
