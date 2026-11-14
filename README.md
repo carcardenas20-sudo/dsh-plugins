@@ -41,6 +41,14 @@ dsh plugin --profile web add "github:carcardenas20-sudo/dsh-plugins#path:plugins
 
 Harness Desktop: **solo desde la app** (Plugins → Add plugin) con el mismo enlace. No uses scripts ni la CLI sobre el perfil desktop: puede dañar la app.
 
+Si la app dice "GitHub connection timed out" (la app solo le da 5 segundos a `git` para responder), instala el paquete directo, también desde Plugins → Add plugin:
+
+```
+https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/<nombre>-<versión>.tgz
+```
+
+Los nombres exactos están en la carpeta [paquetes](paquetes), por ejemplo `dsh-lienzo-0.1.0.tgz`.
+
 Quitar: `dsh plugin --profile web remove dsh-prueba-entrega` (igual para los demás).
 
 ## Desarrollo
