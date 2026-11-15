@@ -1,0 +1,14 @@
+{
+  "name": "dsh-transcriptor",
+  "version": "0.1.0",
+  "description": "Voz a texto local en DeepSeek Harness: transcribe grabaciones con Whisper en tu PC (con el vocabulario del proyecto y marcas en lo que no se oyó bien) y dictado por voz desde una página local",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "pagina.js", "motor.py", "cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "transcripcion", "whisper", "dictado", "voz"],
+  "author": "Carlos Cárdenas",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-transcriptor" },
+  "engines": { "node": ">=22" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
