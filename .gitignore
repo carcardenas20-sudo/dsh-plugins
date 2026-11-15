@@ -5,3 +5,4 @@ dist/
 .cambios/
 
 !paquetes/*.tgz
+__pycache__/
