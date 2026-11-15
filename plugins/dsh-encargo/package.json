@@ -1,0 +1,14 @@
+{
+  "name": "dsh-encargo",
+  "version": "0.1.0",
+  "description": "Convierte un pedido corto en un encargo completo (lo no dicho, lo afectado, la lista de terminado) con la memoria y el mapa del proyecto, verifica que se cumpla antes de entregar y aprende de las omisiones que corrige el usuario",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "requisitos", "especificacion", "calidad"],
+  "author": "Carlos Cárdenas",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-encargo" },
+  "engines": { "node": ">=22" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
