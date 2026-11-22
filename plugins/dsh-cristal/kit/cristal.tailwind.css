@@ -1,0 +1,37 @@
+/* Cristal para Tailwind CSS v4.
+   En tu CSS principal (por ejemplo src/index.css), después de @import "tailwindcss";
+     @import "./cristal/cristal.css";
+     @import "./cristal/cristal.tailwind.css";
+   Así puedes mezclar clases cr-* con utilidades: bg-acento, text-texto-2, rounded-cr-grande,
+   shadow-cr-2, ease-suave, duration-medio, animate-entra… y todo respeta modo claro/oscuro. */
+@theme inline {
+  --color-acento: var(--cr-acento);
+  --color-acento-suave: var(--cr-acento-suave);
+  --color-fondo: var(--cr-fondo);
+  --color-superficie: var(--cr-superficie);
+  --color-superficie-2: var(--cr-superficie-2);
+  --color-hundido: var(--cr-hundido);
+  --color-texto: var(--cr-texto);
+  --color-texto-2: var(--cr-texto-2);
+  --color-texto-3: var(--cr-texto-3);
+  --color-borde: var(--cr-borde);
+  --color-ok: var(--cr-ok);
+  --color-aviso: var(--cr-aviso);
+  --color-error: var(--cr-error);
+  --font-sans: var(--cr-fuente);
+  --font-titulo: var(--cr-fuente-titulo);
+  --radius-cr-chico: var(--cr-r-chico);
+  --radius-cr: var(--cr-r);
+  --radius-cr-grande: var(--cr-r-grande);
+  --radius-cr-xl: var(--cr-r-xl);
+  --shadow-cr-1: var(--cr-sombra-1);
+  --shadow-cr-2: var(--cr-sombra-2);
+  --shadow-cr-3: var(--cr-sombra-3);
+  --ease-suave: var(--cr-suave);
+  --ease-resorte: var(--cr-resorte);
+  --animate-entra: cr-entrar var(--cr-lento) var(--cr-suave) both;
+  --animate-revela: cr-revelar var(--cr-lento) var(--cr-suave) both;
+}
+@utility duration-rapido { transition-duration: var(--cr-rapido); }
+@utility duration-medio { transition-duration: var(--cr-medio); }
+@utility duration-lento { transition-duration: var(--cr-lento); }

@@ -1,0 +1,14 @@
+{
+  "name": "dsh-cristal",
+  "version": "0.1.0",
+  "description": "Interfaces modernas, elegantes y con movimiento en DeepSeek Harness: sistema de diseño (tokens, componentes, animaciones, modo oscuro, celular, Tailwind) y revisión en navegador real que obliga a corregir antes de entregar",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "guia.js", "galeria.js", "marca.js", "revisor.js", "kit", "cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "diseño", "interfaz", "ui", "animaciones", "tailwind", "react"],
+  "author": "Carlos Cárdenas",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-cristal" },
+  "engines": { "node": ">=22" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
