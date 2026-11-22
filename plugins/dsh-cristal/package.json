@@ -1,6 +1,6 @@
 {
   "name": "dsh-cristal",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Interfaces modernas, elegantes y con movimiento en DeepSeek Harness: sistema de diseño (tokens, componentes, animaciones, modo oscuro, celular, Tailwind) y revisión en navegador real que obliga a corregir antes de entregar",
   "type": "module",
   "main": "index.js",

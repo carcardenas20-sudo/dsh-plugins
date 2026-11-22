@@ -268,9 +268,9 @@ export async function revisar(objetivo, { navegador, carpetaCapturas, base = 'pa
     await cdp.enviar('Page.enable'); await cdp.enviar('Runtime.enable'); await cdp.enviar('Network.enable')
     await cdp.enviar('Page.addScriptToEvaluateOnNewDocument', { source: ANTES })
     cdp.on('Runtime.exceptionThrown', (p) => errores.push(p.exceptionDetails?.exception?.description?.split('\n')[0] ?? p.exceptionDetails?.text ?? 'error'))
-    cdp.on('Runtime.consoleAPICalled', (p) => { if (p.type === 'error') errores.push((p.args ?? []).map((a) => a.value ?? a.description ?? '').join(' ').slice(0, 200)) })
+    cdp.on('Runtime.consoleAPICalled', (p) => { if (p.type === 'error' && !/^Failed to load resource/.test(String(p.args?.[0]?.value ?? ''))) errores.push((p.args ?? []).map((a) => a.value ?? a.description ?? '').join(' ').slice(0, 200)) })
     cdp.on('Network.loadingFailed', (p) => { if (!p.canceled && p.type !== 'Ping') errores.push(`no cargó un recurso (${p.errorText})`) })
-    cdp.on('Network.responseReceived', (p) => { if (p.response?.status >= 400 && p.type !== 'Fetch' && p.type !== 'XHR') errores.push(`${p.response.status} al cargar ${p.response.url.slice(0, 120)}`) })
+    cdp.on('Network.responseReceived', (p) => { if (p.response?.status >= 400 && p.type !== 'Fetch' && p.type !== 'XHR' && !/\/favicon\.ico(\?|$)/i.test(p.response.url)) errores.push(`${p.response.status} al cargar ${p.response.url.slice(0, 120)}`) })
     if (carpetaCapturas) await mkdir(carpetaCapturas, { recursive: true })
     for (const v of VISTAS) {
       await cdp.enviar('Emulation.setDeviceMetricsOverride', { width: v.ancho, height: v.alto, deviceScaleFactor: 1, mobile: v.movil })

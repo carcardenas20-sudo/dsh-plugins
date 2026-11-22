@@ -1,6 +1,7 @@
 /* Cristal para Tailwind CSS v4.
    En tu CSS principal (por ejemplo src/index.css), después de @import "tailwindcss";
-     @import "./cristal/cristal.css";
+     @import "./cristal/cristal.css" layer(components);
+     @import "./cristal/marca.css" layer(components);
      @import "./cristal/cristal.tailwind.css";
    Así puedes mezclar clases cr-* con utilidades: bg-acento, text-texto-2, rounded-cr-grande,
    shadow-cr-2, ease-suave, duration-medio, animate-entra… y todo respeta modo claro/oscuro. */

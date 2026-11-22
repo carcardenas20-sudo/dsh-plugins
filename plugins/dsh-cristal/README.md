@@ -33,7 +33,7 @@ Después de instalar, abre `cristal/galeria.html` (o `src/cristal/galeria.html`)
 Harness Desktop: **solo desde la app**, en Plugins → Add plugin:
 
 ```
-https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-cristal-0.1.0.tgz
+https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-cristal-0.1.1.tgz
 ```
 
 ## Configuración opcional

@@ -170,7 +170,7 @@ button, input, select, textarea { font: inherit; color: inherit; letter-spacing:
 
 .cr-pagina { width: 100%; max-width: var(--cr-ancho); margin: 0 auto; padding: var(--cr-e8) var(--cr-e6) var(--cr-e16); display: grid; gap: var(--cr-e8); }
 .cr-encabezado { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--cr-e4); }
-.cr-encabezado p { color: var(--cr-texto-2); margin-top: var(--cr-e2); max-width: 62ch; }
+.cr-encabezado p:not(.cr-antetitulo) { color: var(--cr-texto-2); margin-top: var(--cr-e2); max-width: 62ch; }
 .cr-antetitulo { font-size: var(--cr-t-chico); font-weight: 600; color: var(--cr-acento-tinta); margin-bottom: var(--cr-e2); letter-spacing: 0; }
 .cr-seccion { display: grid; gap: var(--cr-e4); }
 .cr-seccion-cab { display: flex; align-items: baseline; justify-content: space-between; gap: var(--cr-e3); }
@@ -437,6 +437,7 @@ dialog.cr-hoja.cr-cerrando::backdrop { animation: cr-velo-sale var(--cr-medio) v
   .cr-app { grid-template-columns: 1fr; }
   .cr-lateral { position: fixed; z-index: 60; inset: 0 auto 0 0; width: min(300px, 86vw); transform: translateX(-102%); transition: transform var(--cr-lento) var(--cr-suave); box-shadow: var(--cr-sombra-3); }
   .cr-app.menu-abierto .cr-lateral { transform: none; }
+  .cr-app.menu-abierto::after { content: ""; position: fixed; inset: 0; z-index: 55; background: var(--cr-velo); animation: cr-velo-entra var(--cr-medio) var(--cr-suave) both; }
   .cr-solo-escritorio { display: none !important; }
 }
 @media (min-width: 901px) { .cr-solo-celular { display: none !important; } }

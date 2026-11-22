@@ -20,7 +20,7 @@ export const name = 'cristal'
 export const inject = ['tools', 'workingDirectory', 'systemPrompt']
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url))
-const VERSION = '0.1.0'
+const VERSION = '0.1.1'
 const MARCADOR = '.dsh-cristal.json'
 const DEFAULTS = { navegador: null, rondas: 2, carpetaCapturas: '.dsh-cristal/capturas', acento: '#0b63f6' }
 const SOURCE_KIND = 'dsh-cristal'
@@ -57,7 +57,7 @@ export function instruccionesConexion(p, carpeta) {
   if (p.tipo === 'react' || p.tipo === 'vue' || p.tipo === 'svelte' || (p.tipo === 'web' && p.entrada)) {
     const l = []
     if (p.tailwind === 4 && p.cssPrincipal) {
-      l.push(`En ${p.cssPrincipal}, justo después de @import "tailwindcss";`, `  @import "${rel(p.cssPrincipal)}/cristal.css";`, `  @import "${rel(p.cssPrincipal)}/marca.css";`, `  @import "${rel(p.cssPrincipal)}/cristal.tailwind.css";`)
+      l.push(`En ${p.cssPrincipal}, justo después de @import "tailwindcss"; (con layer(components) para que las utilidades de Tailwind puedan ajustar los componentes):`, `  @import "${rel(p.cssPrincipal)}/cristal.css" layer(components);`, `  @import "${rel(p.cssPrincipal)}/marca.css" layer(components);`, `  @import "${rel(p.cssPrincipal)}/cristal.tailwind.css";`)
       if (p.entrada) l.push(`En ${p.entrada}, con los demás imports:`, `  import "${rel(p.entrada)}/cristal.js"`)
     } else if (p.entrada) {
       l.push(`En ${p.entrada}, antes de importar tus propios estilos:`, `  import "${rel(p.entrada)}/cristal.css"`, `  import "${rel(p.entrada)}/marca.css"`, `  import "${rel(p.entrada)}/cristal.js"`)

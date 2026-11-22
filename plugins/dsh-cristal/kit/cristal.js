@@ -110,10 +110,11 @@
     var t = e.target; if (!t.closest) return;
     var a = t.closest("[data-cr-abrir]"); if (a) { e.preventDefault(); abrir(a.getAttribute("data-cr-abrir")); return; }
     var c = t.closest("[data-cr-cerrar]"); if (c) { e.preventDefault(); cerrar(c.closest("dialog") || c.getAttribute("data-cr-cerrar")); return; }
-    var tm = t.closest("[data-cr-tema]"); if (tm) { var v = tm.getAttribute("data-cr-tema"); tema(v && v !== "alternar" ? v : (esOscuro() ? "claro" : "oscuro")); return; }
+    var tm = t.closest("[data-cr-tema]"); if (tm) { var v = tm.getAttribute("data-cr-tema"); tema(v === "claro" || v === "oscuro" || v === "sistema" ? v : (esOscuro() ? "claro" : "oscuro")); return; } // React escribe data-x="true"
     var m = t.closest("[data-cr-menu]"); if (m) { var app = m.closest(".cr-app") || doc.querySelector(".cr-app"); if (app) app.classList.toggle("menu-abierto"); return; }
     var p = t.closest(".cr-pestanas-lista button"); if (p) { elegirPestana(p); return; }
     var item = t.closest(".cr-app.menu-abierto .cr-menu-item"); if (item) item.closest(".cr-app").classList.remove("menu-abierto");
+    if (t.classList && t.classList.contains("cr-app") && t.classList.contains("menu-abierto")) t.classList.remove("menu-abierto"); // toque fuera del menú
   });
 
   // ---------- revelar al hacer scroll (si el navegador no lo hace solo con CSS) ----------
@@ -154,5 +155,5 @@
   }
   if (doc.readyState === "loading") doc.addEventListener("DOMContentLoaded", iniciar); else iniciar();
 
-  window.cristal = { aviso: aviso, abrir: abrir, cerrar: cerrar, tema: tema, transicion: transicion, preparar: preparar, version: "0.1.0" };
+  window.cristal = { aviso: aviso, abrir: abrir, cerrar: cerrar, tema: tema, transicion: transicion, preparar: preparar, version: "0.1.1" };
 })();
