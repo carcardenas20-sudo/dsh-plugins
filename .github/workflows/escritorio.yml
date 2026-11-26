@@ -2,6 +2,7 @@
 # Publicar una versión (las apps ya instaladas la descargan solas y se actualizan al cerrarse), de dos formas:
 # - Desde la web: pestaña Actions → Escritorio → Run workflow → escribe la versión (ej. 1.2.0).
 # - Con git: git tag escritorio-v1.2.0 && git push origin escritorio-v1.2.0
+# - O en Releases → "Draft a new release" con la etiqueta escritorio-v1.2.0 (los instaladores se suben solos).
 # "Run workflow" con la versión vacía solo compila (los instaladores quedan en esa ejecución).
 name: Escritorio
 
@@ -89,5 +90,12 @@ jobs:
         run: |
           ls -la salida
           V="${VERSION#escritorio-v}"
-          gh release create "escritorio-v$V" salida/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Academia $V" --latest \
-            --notes "Instaladores de Academia $V. Windows: .exe · Mac: .dmg · Linux: .AppImage. Las apps ya instaladas se actualizan solas."
+          T="escritorio-v$V"
+          NOTAS="Instaladores de Academia $V. Windows: .exe · Mac: .dmg · Linux: .AppImage. Las apps ya instaladas se actualizan solas."
+          if gh release view "$T" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # La versión se creó a mano en Releases: se le suben los instaladores.
+            gh release upload "$T" salida/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$T" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+          else
+            gh release create "$T" salida/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Academia $V" --latest --notes "$NOTAS"
+          fi
