@@ -40,6 +40,9 @@ jobs:
         working-directory: ejemplos/academia/escritorio
         shell: bash
         run: npm pkg set version="${GITHUB_REF_NAME#escritorio-v}"
+      - name: Mac sin Spotlight (evita que el .dmg quede "ocupado")
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off
       - name: Instaladores
         working-directory: ejemplos/academia/escritorio
         shell: bash
