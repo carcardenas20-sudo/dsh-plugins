@@ -42,7 +42,7 @@
         "to": "icon.png"
       }
     ],
-    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "artifactName": "academia-${version}-${os}-${arch}.${ext}",
     "win": {
       "target": [
         {
@@ -68,6 +68,12 @@
       "target": [
         {
           "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
           "arch": [
             "universal"
           ]

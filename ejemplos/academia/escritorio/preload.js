@@ -19,4 +19,14 @@ contextBridge.exposeInMainWorld('escritorio', {
   info: () => ipcRenderer.invoke('info'),
   /** Consulta o cambia si la app arranca con el sistema. */
   iniciarConSistema: (activar) => ipcRenderer.invoke('inicio-sistema', activar),
+  actualizaciones: {
+    /** { estado: inactivo|buscando|al-dia|disponible|descargando|lista|error, version, progreso, version_actual } */
+    estado: () => ipcRenderer.invoke('actualizacion:estado'),
+    /** Busca ahora (avisa si ya está al día). */
+    buscar: () => ipcRenderer.invoke('actualizacion:buscar'),
+    /** Con estado "lista": reinicia e instala. Con "disponible" (Mac sin firma): abre la página de descarga. */
+    instalar: () => ipcRenderer.invoke('actualizacion:instalar'),
+    /** Avisa cada cambio de estado: alCambiar((estado) => …). Devuelve una función para dejar de escuchar. */
+    alCambiar: (fn) => { const h = (_e, s) => fn(s); ipcRenderer.on('actualizacion', h); return () => ipcRenderer.removeListener('actualizacion', h) },
+  },
 })

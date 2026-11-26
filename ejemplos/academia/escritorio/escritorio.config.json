@@ -12,5 +12,9 @@
     "carpeta": "..",
     "comando": "npm run build -- --base=./",
     "salida": "dist"
+  },
+  "publicacion": {
+    "owner": "carcardenas20-sudo",
+    "repo": "dsh-plugins"
   }
 }

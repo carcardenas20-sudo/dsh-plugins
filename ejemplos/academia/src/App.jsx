@@ -18,6 +18,17 @@ export default function App() {
   const [form, setForm] = useState({ nombre: "", documento: "", curso: "B1", sede: "Norte" })
   const [errores, setErrores] = useState({})
   const [guardando, setGuardando] = useState(false)
+  const [act, setAct] = useState(null) // actualizaciones de la app de escritorio
+
+  useEffect(() => {
+    const e = window.escritorio?.actualizaciones
+    if (!e) return
+    e.estado().then(setAct)
+    return e.alCambiar((s) => {
+      setAct((prev) => ({ ...prev, ...s }))
+      if (s.estado === "lista") window.cristal.aviso(`Versión ${s.version} lista`, { tipo: "ok", accion: "Reiniciar", alAccion: () => e.instalar() })
+    })
+  }, [])
 
   useEffect(() => { const t = setTimeout(() => { setAprendices(INICIALES); setCargando(false) }, 700); return () => clearTimeout(t) }, [])
   const filtrados = useMemo(() => aprendices.filter((a) => (a.nombre + a.documento).toLowerCase().includes(buscar.toLowerCase())), [aprendices, buscar])
@@ -62,6 +73,13 @@ export default function App() {
         <a className="cr-menu-item" href="#"><CreditCard {...ic} />Pagos</a>
         <div className="cr-menu-titulo">Sistema</div>
         <a className="cr-menu-item" href="#"><Settings {...ic} />Ajustes</a>
+        {act && (
+          <div style={{ marginTop: "auto", padding: "12px 10px", fontSize: 12, color: "var(--cr-texto-2, #6e6e73)", display: "grid", gap: 8 }}>
+            {act.estado === "lista" && <button className="cr-boton chico" onClick={() => window.escritorio.actualizaciones.instalar()}>Actualizar a {act.version}</button>}
+            {act.estado === "descargando" && <span>Descargando {act.version}… {act.progreso ?? 0}%</span>}
+            <span>Versión {act.version_actual}</span>
+          </div>
+        )}
       </aside>
       <div className="cr-principal">
         <header className="cr-barra">
