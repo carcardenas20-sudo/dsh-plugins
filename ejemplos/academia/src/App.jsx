@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { LayoutDashboard, Users, CalendarDays, CreditCard, Settings, Menu, Moon, Plus, Inbox } from "lucide-react"
+import { LayoutDashboard, Users, CalendarDays, CreditCard, Settings, Menu, Moon, Plus, Inbox, Bot } from "lucide-react"
 
 const INICIALES = [
   { id: 1, nombre: "Laura Martínez", documento: "1023456789", curso: "B1", sede: "Norte", estado: "Al día", saldo: 980000 },
@@ -19,6 +19,17 @@ export default function App() {
   const [errores, setErrores] = useState({})
   const [guardando, setGuardando] = useState(false)
   const [act, setAct] = useState(null) // actualizaciones de la app de escritorio
+
+  // Avisos de las automatizaciones de escritorio (ctx.interfaz) → aviso en pantalla
+  useEffect(() => {
+    const a = window.escritorio?.automatizaciones
+    if (!a) return
+    const pesos = new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 })
+    return a.alEvento(({ evento, datos }) => {
+      if (evento === "pagos-actualizados") window.cristal.aviso(`Pagos al día: ${pesos.format(datos.total)} · ${datos.vencidos} vencidos`, { tipo: "ok" })
+      if (evento === "matriculas-importadas") window.cristal.aviso(`${datos.buenas} matrículas importadas${datos.malas ? ` · ${datos.malas} con errores` : ""}`, { tipo: datos.malas ? "aviso" : "ok" })
+    })
+  }, [])
 
   useEffect(() => {
     const e = window.escritorio?.actualizaciones
@@ -72,6 +83,7 @@ export default function App() {
         <a className="cr-menu-item" href="#"><CalendarDays {...ic} />Agenda</a>
         <a className="cr-menu-item" href="#"><CreditCard {...ic} />Pagos</a>
         <div className="cr-menu-titulo">Sistema</div>
+        {window.escritorio?.automatizaciones && <a className="cr-menu-item" href="#" onClick={(ev) => { ev.preventDefault(); window.escritorio.automatizaciones.abrirPanel() }}><Bot {...ic} />Automatizaciones</a>}
         <a className="cr-menu-item" href="#"><Settings {...ic} />Ajustes</a>
         {act && (
           <div style={{ marginTop: "auto", padding: "12px 10px", fontSize: 12, color: "var(--cr-texto-2, #6e6e73)", display: "grid", gap: 8 }}>

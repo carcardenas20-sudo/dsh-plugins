@@ -16,5 +16,10 @@
   "publicacion": {
     "owner": "carcardenas20-sudo",
     "repo": "dsh-plugins"
+  },
+  "variables": {
+    "plataforma": "http://127.0.0.1:8890",
+    "usuario": "demo",
+    "clave": "demo123"
   }
 }

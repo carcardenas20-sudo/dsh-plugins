@@ -19,6 +19,23 @@ contextBridge.exposeInMainWorld('escritorio', {
   info: () => ipcRenderer.invoke('info'),
   /** Consulta o cambia si la app arranca con el sistema. */
   iniciarConSistema: (activar) => ipcRenderer.invoke('inicio-sistema', activar),
+  automatizaciones: {
+    /** [{ id, nombre, descripcion, cuando[], activa, ejecutando, progreso, proxima, ultima: { ok, fin, ms, error, resultado } }] */
+    lista: () => ipcRenderer.invoke('auto:lista'),
+    /** Pone a correr una automatización; datos llega como ctx.disparo.datos. */
+    ejecutar: (id, datos) => ipcRenderer.invoke('auto:ejecutar', id, datos),
+    activar: (id, activa) => ipcRenderer.invoke('auto:activar', id, activa),
+    cancelar: (id) => ipcRenderer.invoke('auto:cancelar', id),
+    historial: (id, n) => ipcRenderer.invoke('auto:historial', id, n),
+    /** Pasa la sesión de Supabase del usuario (supabase.auth.getSession()) para que las automatizaciones actúen como él. */
+    sesion: (s) => ipcRenderer.invoke('auto:sesion', s ? { access_token: s.access_token, refresh_token: s.refresh_token } : null),
+    abrirPanel: (id) => ipcRenderer.invoke('auto:panel', id),
+    abrirArchivo: (f) => ipcRenderer.invoke('auto:abrir-archivo', f),
+    /** Cambios de estado: alCambiar((lista) => …) */
+    alCambiar: (fn) => { const h = (_e, l) => fn(l); ipcRenderer.on('automatizaciones', h); return () => ipcRenderer.removeListener('automatizaciones', h) },
+    /** Mensajes de ctx.interfaz(evento, datos): alEvento(({ id, evento, datos }) => …) */
+    alEvento: (fn) => { const h = (_e, m) => fn(m); ipcRenderer.on('automatizacion:evento', h); return () => ipcRenderer.removeListener('automatizacion:evento', h) },
+  },
   actualizaciones: {
     /** { estado: inactivo|buscando|al-dia|disponible|descargando|lista|error, version, progreso, version_actual } */
     estado: () => ipcRenderer.invoke('actualizacion:estado'),

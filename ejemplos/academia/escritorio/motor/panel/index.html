@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' app:; img-src 'self' app: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Automatizaciones</title>
+<style>
+  :root {
+    --fondo: #f5f5f7; --capa: #ffffff; --capa-2: #f0f0f3; --linea: rgba(0,0,0,.08); --texto: #1d1d1f; --texto-2: #6e6e73;
+    --acento: #0a66ff; --acento-suave: rgba(10,102,255,.1); --ok: #1f9d55; --ok-suave: rgba(31,157,85,.12);
+    --mal: #d93025; --mal-suave: rgba(217,48,37,.1); --pausa: #8e8e93; --sombra: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.06);
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --fondo: #000; --capa: #1c1c1e; --capa-2: #2c2c2e; --linea: rgba(255,255,255,.1); --texto: #f5f5f7; --texto-2: #98989d;
+      --acento: #3b8bff; --acento-suave: rgba(59,139,255,.16); --ok: #34c768; --ok-suave: rgba(52,199,104,.16); --mal: #ff5f57; --mal-suave: rgba(255,95,87,.15); --sombra: none; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", Inter, Roboto, sans-serif; background: var(--fondo); color: var(--texto); -webkit-font-smoothing: antialiased; }
+  .marco { display: grid; grid-template-columns: minmax(0, 1fr) 420px; height: 100vh; }
+  .marco.sin-detalle { grid-template-columns: 1fr; }
+  .marco.sin-detalle .detalle { display: none; }
+  main { overflow: auto; padding: 28px 28px 40px; }
+  header { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+  h1 { font-size: 26px; letter-spacing: -.02em; margin: 0; }
+  .sub { color: var(--texto-2); margin: 2px 0 0; }
+  .resumen { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--capa-2); color: var(--texto-2); white-space: nowrap; }
+  .chip.ok { background: var(--ok-suave); color: var(--ok); }
+  .chip.mal { background: var(--mal-suave); color: var(--mal); }
+  .chip.vivo { background: var(--acento-suave); color: var(--acento); }
+  .chip .punto { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .chip.vivo .punto { animation: latido 1.2s ease-in-out infinite; }
+  @keyframes latido { 50% { opacity: .3; } }
+  .lista { display: grid; gap: 12px; }
+  .tarjeta { background: var(--capa); border: 1px solid var(--linea); border-radius: 16px; padding: 16px 18px; box-shadow: var(--sombra); cursor: pointer; transition: border-color .15s, transform .15s; }
+  .tarjeta:hover { border-color: var(--acento); }
+  .tarjeta.elegida { border-color: var(--acento); box-shadow: 0 0 0 3px var(--acento-suave); }
+  .tarjeta.pausada { opacity: .62; }
+  .fila { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .nombre { font-weight: 650; font-size: 15px; }
+  .desc { color: var(--texto-2); margin: 2px 0 10px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--texto-2); font-size: 12.5px; }
+  .meta b { color: var(--texto); font-weight: 600; }
+  .acciones { display: flex; gap: 6px; flex-shrink: 0; }
+  button { font: inherit; font-weight: 600; font-size: 13px; border: 0; border-radius: 999px; padding: 7px 14px; cursor: pointer; background: var(--capa-2); color: var(--texto); transition: filter .15s, transform .1s; }
+  button:hover { filter: brightness(.96); } button:active { transform: scale(.97); }
+  button.primario { background: var(--acento); color: #fff; }
+  button.peligro { background: var(--mal-suave); color: var(--mal); }
+  button:disabled { opacity: .45; cursor: default; }
+  .barra { height: 4px; background: var(--capa-2); border-radius: 4px; overflow: hidden; margin-top: 12px; }
+  .barra i { display: block; height: 100%; background: var(--acento); border-radius: 4px; transition: width .3s; }
+  .barra.indef i { width: 35% !important; animation: viaje 1.1s ease-in-out infinite; }
+  @keyframes viaje { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+  .error-carga { color: var(--mal); font-size: 12.5px; margin-top: 8px; }
+  .vacio { text-align: center; padding: 60px 20px; color: var(--texto-2); border: 1px dashed var(--linea); border-radius: 16px; }
+  .detalle { border-left: 1px solid var(--linea); background: var(--capa); overflow: auto; padding: 24px 22px; }
+  .detalle h2 { font-size: 18px; margin: 0 0 4px; }
+  .corrida { border: 1px solid var(--linea); border-radius: 12px; padding: 12px 14px; margin-top: 10px; }
+  .corrida summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  .corrida summary::-webkit-details-marker { display: none; }
+  .corrida .cuando { color: var(--texto-2); font-size: 12px; }
+  pre { white-space: pre-wrap; word-break: break-word; font: 12px/1.5 ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; background: var(--capa-2); border-radius: 10px; padding: 10px 12px; margin: 10px 0 0; max-height: 260px; overflow: auto; }
+  .fotos { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .fotos img { width: 120px; height: 80px; object-fit: cover; object-position: top; border-radius: 8px; border: 1px solid var(--linea); cursor: zoom-in; }
+  .err { color: var(--mal); margin-top: 8px; font-weight: 600; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="marco sin-detalle" id="marco">
+  <main>
+    <header>
+      <div><h1>Automatizaciones</h1><p class="sub" id="sub">Cargando…</p></div>
+      <div class="resumen" id="resumen"></div>
+    </header>
+    <div class="lista" id="lista"></div>
+  </main>
+  <aside class="detalle" id="detalle" aria-live="polite"></aside>
+</div>
+<script>
+const api = window.escritorio?.automatizaciones
+const $ = (id) => document.getElementById(id)
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+const fmt = new Intl.DateTimeFormat('es', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+const fecha = (iso) => iso ? fmt.format(new Date(iso)) : '—'
+const dur = (ms) => ms == null ? '' : ms < 1000 ? `${ms} ms` : ms < 60e3 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 60e3)} min`
+let autos = []
+let elegida = new URLSearchParams(location.search).get('id')
+
+function estadoChip(a) {
+  if (a.error) return '<span class="chip mal"><span class="punto"></span>Con error</span>'
+  if (a.ejecutando) return '<span class="chip vivo"><span class="punto"></span>Ejecutando</span>'
+  if (!a.activa) return '<span class="chip">En pausa</span>'
+  if (a.ultima && !a.ultima.ok) return '<span class="chip mal"><span class="punto"></span>Último intento falló</span>'
+  if (a.ultima?.ok) return '<span class="chip ok"><span class="punto"></span>Al día</span>'
+  return '<span class="chip">Lista</span>'
+}
+
+function pintar() {
+  const vivas = autos.filter((a) => a.ejecutando).length, malas = autos.filter((a) => a.error || (a.ultima && !a.ultima.ok)).length
+  $('sub').textContent = autos.length ? `${autos.length} automatizaci${autos.length === 1 ? 'ón' : 'ones'} · siguen corriendo con la ventana cerrada` : 'Todavía no hay automatizaciones'
+  $('resumen').innerHTML = (vivas ? `<span class="chip vivo"><span class="punto"></span>${vivas} en curso</span>` : '') + (malas ? `<span class="chip mal">${malas} con problemas</span>` : '')
+  $('lista').innerHTML = autos.length ? autos.map((a) => `
+    <article class="tarjeta ${a.activa ? '' : 'pausada'} ${a.id === elegida ? 'elegida' : ''}" data-id="${esc(a.id)}" tabindex="0">
+      <div class="fila">
+        <div><div class="nombre">${esc(a.nombre)}</div></div>
+        <div class="acciones">
+          ${a.ejecutando ? `<button class="peligro" data-accion="cancelar">Detener</button>` : `<button class="primario" data-accion="ejecutar" ${a.error ? 'disabled' : ''}>Ejecutar</button>`}
+          <button data-accion="pausar" ${a.error ? 'disabled' : ''}>${a.activa ? 'Pausar' : 'Activar'}</button>
+        </div>
+      </div>
+      ${a.descripcion ? `<p class="desc">${esc(a.descripcion)}</p>` : '<div style="height:8px"></div>'}
+      <div class="meta">
+        ${estadoChip(a)}
+        <span>${a.cuando.map(esc).join(' · ')}</span>
+        ${a.proxima && a.activa ? `<span>Próxima: <b>${fecha(a.proxima)}</b></span>` : ''}
+        ${a.ultima ? `<span>Última: <b>${fecha(a.ultima.fin)}</b> (${dur(a.ultima.ms)})</span>` : ''}
+        ${a.enCola ? `<span>${a.enCola} en espera</span>` : ''}
+      </div>
+      ${a.ejecutando ? `<div class="barra ${a.progreso ? '' : 'indef'}"><i style="width:${a.progreso?.porcentaje ?? 0}%"></i></div>${a.progreso?.texto ? `<div class="meta" style="margin-top:6px">${esc(a.progreso.texto)}</div>` : ''}` : ''}
+      ${a.error ? `<div class="error-carga">${esc(a.error)}</div>` : ''}
+    </article>`).join('') : '<div class="vacio">Pídele a DeepSeek una automatización: "cada día a las 6 pm descarga el reporte de la plataforma y guárdalo en Documentos".</div>'
+  if (elegida) pintarDetalle()
+}
+
+async function pintarDetalle() {
+  const a = autos.find((x) => x.id === elegida)
+  $('marco').classList.toggle('sin-detalle', !a)
+  if (!a) return
+  const corridas = await api.historial(a.id, 30)
+  const disparo = (d) => ({ cron: 'por horario', cada: 'por intervalo', carpeta: `archivo nuevo: ${d.nombre || ''}`, tabla: `cambio en ${d.tabla} (${d.evento})`, manual: 'a mano', interfaz: 'desde la app', alIniciar: 'al abrir', encadenada: `después de ${d.desde}`, prueba: 'prueba' }[d.tipo] || d.tipo)
+  $('detalle').innerHTML = `
+    <div class="fila"><h2>${esc(a.nombre)}</h2><button data-cerrar>Cerrar</button></div>
+    <p class="sub">${a.cuando.map(esc).join(' · ')}</p>
+    ${corridas.length ? corridas.map((c, i) => `
+      <details class="corrida" ${i === 0 ? 'open' : ''}>
+        <summary><span>${c.ok ? '<span class="chip ok">Bien</span>' : '<span class="chip mal">Falló</span>'} <span class="cuando">${fecha(c.inicio)} · ${dur(c.ms)} · ${esc(disparo(c.disparo || {}))}${c.intento > 1 ? ` · intento ${c.intento}` : ''}</span></span></summary>
+        ${c.error ? `<div class="err">${esc(c.error)}</div>` : ''}
+        ${c.resultado != null ? `<pre>${esc(typeof c.resultado === 'string' ? c.resultado : JSON.stringify(c.resultado, null, 2))}</pre>` : ''}
+        ${c.capturas?.length ? `<div class="fotos">${c.capturas.map((f) => `<img src="app://datos/${encodeURIComponent(f.archivo.split(/[\\/]/).pop())}" alt="Pantalla del robot en ${esc(f.url)}" title="${esc(f.url)}" data-archivo="${esc(f.archivo)}">`).join('')}</div>` : ''}
+        ${c.registros?.length ? `<pre>${esc(c.registros.join('\n'))}</pre>` : ''}
+      </details>`).join('') : '<p class="sub" style="margin-top:20px">Todavía no se ha ejecutado.</p>'}`
+}
+
+document.addEventListener('click', async (ev) => {
+  const img = ev.target.closest('img[data-archivo]')
+  if (img) return api.abrirArchivo(img.dataset.archivo)
+  if (ev.target.closest('[data-cerrar]')) { elegida = null; $('marco').classList.add('sin-detalle'); return pintar() }
+  const tarjeta = ev.target.closest('.tarjeta'); if (!tarjeta) return
+  const id = tarjeta.dataset.id, acc = ev.target.closest('[data-accion]')?.dataset.accion
+  if (acc === 'ejecutar') { await api.ejecutar(id); elegida = id }
+  else if (acc === 'cancelar') api.cancelar(id)
+  else if (acc === 'pausar') { const a = autos.find((x) => x.id === id); await api.activar(id, !a.activa) }
+  else elegida = id
+  pintar()
+})
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.target.classList?.contains('tarjeta')) ev.target.click() })
+
+if (!api) { $('sub').textContent = 'Este panel solo funciona dentro de la app.' }
+else {
+  api.lista().then((l) => { autos = l; pintar() })
+  api.alCambiar((l) => { autos = l; pintar() })
+}
+</script>
+</body>
+</html>

@@ -23,9 +23,21 @@ app.on('second-instance', () => mostrar())
 
 // ---------- protocolo app:// para servir la interfaz (rutas de React Router incluidas) ----------
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false } }])
+const CARPETA_PANEL = path.join(__dirname, 'motor', 'panel')
 function servirInterfaz() {
   protocol.handle('app', (req) => {
-    const { pathname } = new URL(req.url)
+    const { pathname, host } = new URL(req.url)
+    // app://motor/ = panel de automatizaciones · app://datos/<foto>.png = capturas de los robots
+    if (host === 'motor') {
+      const f = path.normalize(path.join(CARPETA_PANEL, decodeURIComponent(pathname) === '/' ? 'index.html' : decodeURIComponent(pathname)))
+      return f.startsWith(CARPETA_PANEL) && fs.existsSync(f) ? net.fetch(pathToFileURL(f).toString()) : new Response('No existe', { status: 404 })
+    }
+    if (host === 'datos') {
+      const base = path.join(carpetaDatosMotor(), 'capturas')
+      const f = path.normalize(path.join(base, path.basename(decodeURIComponent(pathname))))
+      return f.startsWith(base) && fs.existsSync(f) ? net.fetch(pathToFileURL(f).toString()) : new Response('No existe', { status: 404 })
+    }
+    if (CONFIG.url) return new Response('No existe', { status: 404 })
     let archivo = path.normalize(path.join(CARPETA_WEB, decodeURIComponent(pathname)))
     if (!archivo.startsWith(CARPETA_WEB)) return new Response('No permitido', { status: 403 })
     if (!fs.existsSync(archivo) || fs.statSync(archivo).isDirectory()) {
@@ -108,6 +120,7 @@ function menuBandeja() {
   bandeja.setContextMenu(Menu.buildFromTemplate([
     { label: `Abrir ${CONFIG.nombre}`, click: mostrar },
     ...(CONFIG.atajo ? [{ label: `Atajo: ${CONFIG.atajo.replace('CommandOrControl', process.platform === 'darwin' ? '⌘' : 'Ctrl')}`, enabled: false }] : []),
+    ...(motor ? [{ label: (() => { const l = motor.lista(); const v = l.filter((x) => x.ejecutando).length; return `Automatizaciones (${l.length})${v ? ` · ${v} en curso` : ''}` })(), click: () => abrirPanel() }] : []),
     { type: 'separator' },
     { label: `Versión ${app.getVersion()}`, enabled: false },
     ...(CONFIG.actualizaciones && app.isPackaged ? [itemAct] : []),
@@ -222,6 +235,55 @@ ipcMain.handle('actualizacion:buscar', (ev) => { if (permitidoIpc(ev)) revisarAc
 ipcMain.handle('actualizacion:instalar', (ev) => { if (permitidoIpc(ev)) { if (actualizacion.estado === 'disponible') abrirPaginaVersiones(); else instalarActualizacion() } })
 
 // ---------- modo prueba: abrir, fotografiar en claro y oscuro, reportar y salir ----------
+// ---------- automatizaciones (escritorio/automatizaciones/*.js) ----------
+const { crearMotor } = require('./motor/motor.cjs')
+const CARPETA_AUTOMATIZACIONES = path.join(__dirname, 'automatizaciones')
+const carpetaDatosMotor = () => path.join(app.getPath('userData'), 'automatizaciones')
+let motor = null
+let panel = null
+const ventanasVivas = () => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed())
+function iniciarMotor({ armar = true } = {}) {
+  if (!fs.existsSync(CARPETA_AUTOMATIZACIONES)) return null
+  motor = crearMotor({
+    carpetaAutomatizaciones: CARPETA_AUTOMATIZACIONES,
+    carpetaDatos: carpetaDatosMotor(),
+    config: CONFIG,
+    armarDisparadores: armar,
+    registrar: (m) => { try { fs.appendFileSync(path.join(carpetaDatosMotor(), 'motor.log'), `${new Date().toISOString()} ${m}\n`) } catch {} },
+    avisar: (lista) => { for (const w of ventanasVivas()) w.webContents.send('automatizaciones', lista); menuBandeja() },
+    notificar: (titulo, cuerpo, id) => aviso(titulo, cuerpo, () => abrirPanel(id)),
+    alEventoInterfaz: (e) => { for (const w of ventanasVivas()) w.webContents.send('automatizacion:evento', e) },
+  })
+  return motor.cargar()
+}
+function abrirPanel(id) {
+  const url = `app://motor/${id ? `?id=${encodeURIComponent(id)}` : ''}`
+  if (panel && !panel.isDestroyed()) { panel.loadURL(url); panel.show(); panel.focus(); return }
+  panel = new BrowserWindow({
+    title: `Automatizaciones · ${CONFIG.nombre}`, width: 1060, height: 720, minWidth: 560, minHeight: 420, icon: ICONO, show: false, autoHideMenuBar: true,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#000000' : '#f5f5f7',
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: !PRUEBA },
+  })
+  panel.once('ready-to-show', () => panel.show())
+  panel.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  panel.loadURL(url)
+  panel.on('closed', () => { panel = null })
+}
+const exigir = (ev) => { if (!permitidoIpc(ev)) throw new Error('no permitido'); if (!motor) throw new Error('Esta app no tiene automatizaciones') }
+ipcMain.handle('auto:lista', (ev) => { if (!permitidoIpc(ev)) throw new Error('no permitido'); return motor ? motor.lista() : [] })
+ipcMain.handle('auto:ejecutar', (ev, id, datos) => { exigir(ev); return motor.ejecutar(String(id), datos) })
+ipcMain.handle('auto:activar', (ev, id, activa) => { exigir(ev); motor.activar(String(id), !!activa); return true })
+ipcMain.handle('auto:cancelar', (ev, id) => { exigir(ev); motor.cancelar(String(id)); return true })
+ipcMain.handle('auto:historial', (ev, id, n) => { exigir(ev); return motor.historial(id ? String(id) : null, Math.min(Number(n) || 50, 500)) })
+ipcMain.handle('auto:sesion', (ev, s) => { exigir(ev); motor.fijarSesion(s); return true })
+ipcMain.handle('auto:panel', (ev, id) => { if (!permitidoIpc(ev)) throw new Error('no permitido'); abrirPanel(id); return true })
+ipcMain.handle('auto:abrir-archivo', (ev, f) => {
+  if (!permitidoIpc(ev)) throw new Error('no permitido')
+  const r = path.resolve(String(f))
+  if (!r.startsWith(carpetaDatosMotor())) throw new Error('solo archivos de las automatizaciones')
+  return shell.openPath(r)
+})
+
 async function modoPrueba() {
   const res = { nombre: CONFIG.nombre, version: app.getVersion(), plataforma: process.platform, errores: [], capturas: [], bandeja: !!bandeja, atajo: CONFIG.atajo ? globalShortcut.isRegistered(CONFIG.atajo) : null, puente: false }
   const wc = ventana.webContents
@@ -231,7 +293,8 @@ async function modoPrueba() {
   const esperar = (ms) => new Promise((r) => setTimeout(r, ms))
   const listo = () => new Promise((r) => { if (!wc.isLoading()) r(); else wc.once('did-finish-load', r) })
   const salir = (codigo) => { try { fs.writeFileSync(path.join(PRUEBA, 'resultado.json'), JSON.stringify(res, null, 2)) } catch {} ; saliendo = true; app.exit(codigo) }
-  setTimeout(() => { res.errores.push('la prueba superó 60 s'); salir(1) }, 60_000)
+  const conAutos = fs.existsSync(CARPETA_AUTOMATIZACIONES)
+  setTimeout(() => { res.errores.push(`la prueba superó ${conAutos ? 300 : 60} s`); salir(1) }, conAutos ? 300_000 : 60_000)
   try {
     fs.mkdirSync(PRUEBA, { recursive: true })
     await listo(); await esperar(1800)
@@ -248,12 +311,41 @@ async function modoPrueba() {
     }
     nativeTheme.themeSource = 'system'
     if (!res.texto) res.errores.push('la ventana quedó en blanco')
+    if (conAutos) {
+      // Corre cada automatización una vez (salvo las que digan enPrueba: false) sin activar horarios ni vigilantes.
+      const lista = await iniciarMotor({ armar: false })
+      const solo = (process.env.DSH_ESCRITORIO_PRUEBA_AUTOS || '').split(',').filter(Boolean)
+      res.automatizaciones = []
+      for (const a of lista) {
+        if (a.error) { res.automatizaciones.push({ id: a.id, ok: false, error: `no carga: ${a.error}` }); continue }
+        if (solo.length ? !solo.includes(a.id) : a.enPrueba === false) { res.automatizaciones.push({ id: a.id, omitida: true }); continue }
+        motor.ejecutar(a.id, { prueba: true })
+      }
+      await motor.esperarTodas()
+      for (const a of motor.lista()) {
+        const h = motor.historial(a.id, 1)[0]
+        if (!h || res.automatizaciones.some((x) => x.id === a.id)) continue
+        res.automatizaciones.push({ id: a.id, nombre: a.nombre, cuando: a.cuando, ok: h.ok, ms: h.ms, resultado: h.resultado, error: h.error, registros: h.registros.slice(-25), capturas: h.capturas.map((c) => c.archivo) })
+      }
+      for (const x of res.automatizaciones) if (x.ok === false) res.errores.push(`automatización ${x.id}: ${x.error}`)
+      abrirPanel((res.automatizaciones.find((x) => x.capturas?.length) || res.automatizaciones.find((x) => x.ok !== undefined))?.id)
+      await new Promise((r) => panel.webContents.once('did-finish-load', r))
+      await esperar(1500)
+      for (const [tema, nombre] of [['light', 'claro'], ['dark', 'oscuro']]) {
+        nativeTheme.themeSource = tema
+        await esperar(700)
+        const f = path.join(PRUEBA, `panel-${nombre}.png`)
+        fs.writeFileSync(f, (await panel.webContents.capturePage()).toPNG())
+        res.capturas.push(f)
+      }
+      nativeTheme.themeSource = 'system'
+    }
     salir(res.errores.length ? 1 : 0)
   } catch (e) { res.errores.push(String(e && e.message || e)); salir(1) }
 }
 
 app.whenReady().then(() => {
-  if (!CONFIG.url) servirInterfaz()
+  servirInterfaz()
   // La interfaz no puede pedir cámara, micrófono, ubicación, etc. salvo lo que se habilite aquí.
   session.defaultSession.setPermissionRequestHandler((_wc, permiso, cb) => cb(['notifications', 'clipboard-sanitized-write', 'fullscreen'].includes(permiso)))
   menuAplicacion()
@@ -262,6 +354,7 @@ app.whenReady().then(() => {
   if (CONFIG.atajo) { try { globalShortcut.register(CONFIG.atajo, alternar) } catch {} }
   buscarActualizaciones()
   if (PRUEBA) modoPrueba()
+  else iniciarMotor()
 })
 app.on('activate', mostrar) // Mac: clic en el ícono del dock
 app.on('before-quit', () => { saliendo = true })
