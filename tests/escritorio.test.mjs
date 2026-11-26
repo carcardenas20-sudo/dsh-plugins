@@ -15,7 +15,12 @@ const pkg = paqueteApp({ nombre: 'Créditos', paquete: 'creditos', version: '1.0
 assert.equal(pkg.build.win.target[0].target, 'nsis'); assert.deepEqual(pkg.build.mac.target[0].arch, ['universal'])
 assert.equal(pkg.build.publish[0].repo, 'r'); assert.ok(pkg.devDependencies.electron && pkg.dependencies['electron-updater'])
 const yml = flujoGithub({ dirRel: 'apps/escritorio', webDirRel: '.', nombre: 'Créditos' })
-assert.match(yml, /windows-latest, macos-latest/); assert.match(yml, /working-directory: apps\/escritorio/); assert.match(yml, /tags: \['escritorio-v\*'\]/)
+assert.match(yml, /windows-latest, macos-latest, ubuntu-latest/);
+assert.match(yml, /needs: compilar/); assert.match(yml, /gh release create "\$T"/); assert.match(yml, /gh release upload/); assert.match(yml, /latest\*\.yml/)
+assert.match(yml, /inputs\.version != ''/); assert.doesNotMatch(yml, /if: env\.VERSION != ''\n    runs-on/)
+assert.ok(pkg.build.mac.target.some((t) => t.target === 'zip'), 'Mac necesita .zip para actualizarse')
+assert.ok(!/\$\{productName\}/.test(pkg.build.artifactName), 'el nombre del instalador no debe llevar espacios')
+ assert.match(yml, /working-directory: apps\/escritorio/); assert.match(yml, /tags: \['escritorio-v\*'\]/)
 
 const base = await mkdtemp(path.join(tmpdir(), 'escritorio-'))
 const tools = {}

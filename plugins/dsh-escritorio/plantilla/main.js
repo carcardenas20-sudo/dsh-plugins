@@ -92,16 +92,29 @@ function crearBandeja() {
   let img = nativeImage.createFromPath(ICONO)
   img = img.resize({ width: process.platform === 'darwin' ? 18 : 16, height: process.platform === 'darwin' ? 18 : 16 })
   bandeja = new Tray(img)
-  bandeja.setToolTip(CONFIG.nombre)
+  bandeja.setToolTip(`${CONFIG.nombre} ${app.getVersion()}`)
+  menuBandeja()
+  bandeja.on('click', alternar)
+}
+
+function menuBandeja() {
+  if (!bandeja) return
+  const a = actualizacion
+  const itemAct = a.estado === 'lista' ? { label: `Reiniciar y actualizar a ${a.version}`, click: instalarActualizacion }
+    : a.estado === 'disponible' ? { label: `Descargar versión ${a.version}`, click: abrirPaginaVersiones }
+    : a.estado === 'descargando' ? { label: `Descargando ${a.version}… ${a.progreso ?? 0}%`, enabled: false }
+    : a.estado === 'buscando' ? { label: 'Buscando actualizaciones…', enabled: false }
+    : { label: 'Buscar actualizaciones', click: () => revisarActualizaciones(true), enabled: actualizador !== null }
   bandeja.setContextMenu(Menu.buildFromTemplate([
     { label: `Abrir ${CONFIG.nombre}`, click: mostrar },
     ...(CONFIG.atajo ? [{ label: `Atajo: ${CONFIG.atajo.replace('CommandOrControl', process.platform === 'darwin' ? '⌘' : 'Ctrl')}`, enabled: false }] : []),
     { type: 'separator' },
+    { label: `Versión ${app.getVersion()}`, enabled: false },
+    ...(CONFIG.actualizaciones && app.isPackaged ? [itemAct] : []),
     { label: 'Iniciar con el sistema', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin, click: (i) => app.setLoginItemSettings({ openAtLogin: i.checked }) },
     { type: 'separator' },
     { label: 'Salir', click: () => { saliendo = true; app.quit() } },
   ]))
-  bandeja.on('click', alternar)
 }
 
 function menuAplicacion() {
@@ -140,17 +153,73 @@ ipcMain.handle('info', () => ({ nombre: CONFIG.nombre, version: app.getVersion()
 ipcMain.handle('inicio-sistema', (ev, activar) => { if (permitidoIpc(ev)) { if (typeof activar === 'boolean') app.setLoginItemSettings({ openAtLogin: activar }); return app.getLoginItemSettings().openAtLogin } })
 
 // ---------- actualizaciones automáticas (cuando hay versiones publicadas en GitHub) ----------
+// Windows y Linux: descarga en segundo plano y se instala al cerrar la app (o al instante con "Reiniciar y actualizar").
+// Mac: instalar solo exige firmar la app con un certificado de Apple ("macFirmada": true en escritorio.config.json);
+// sin firma la app avisa de la versión nueva y abre la página de descarga.
+// Registro de lo que pasó: <datos de la app>/actualizaciones.log
+let actualizador = null
+let actualizacion = { estado: 'inactivo' }
+const MAC_SIN_FIRMA = process.platform === 'darwin' && !CONFIG.macFirmada
+const registrar = (m) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'actualizaciones.log'), `${new Date().toISOString()} ${m}\n`) } catch {} }
+function fijarActualizacion(cambio) {
+  actualizacion = { ...actualizacion, ...cambio }
+  menuBandeja()
+  if (ventana && !ventana.isDestroyed()) ventana.webContents.send('actualizacion', actualizacion)
+}
+function aviso(titulo, cuerpo, alTocar) {
+  if (!Notification.isSupported()) return
+  const n = new Notification({ title: titulo, body: cuerpo, icon: ICONO })
+  if (alTocar) n.on('click', alTocar)
+  n.show()
+}
+function abrirPaginaVersiones() {
+  const p = (actualizador?.config ?? CONFIG.publicacion) || {}
+  const url = CONFIG.paginaVersiones || (p.owner && p.repo ? `https://github.com/${p.owner}/${p.repo}/releases/latest` : null)
+  if (url) shell.openExternal(url)
+}
+function instalarActualizacion() {
+  if (actualizacion.estado !== 'lista' || !actualizador) return
+  registrar(`instalando ${actualizacion.version} y reiniciando`)
+  saliendo = true
+  setImmediate(() => actualizador.quitAndInstall(true, true))
+}
+function revisarActualizaciones(manual = false) {
+  if (!actualizador || ['buscando', 'descargando', 'lista'].includes(actualizacion.estado)) return
+  actualizador.checkForUpdates().catch((e) => { registrar(`error: ${e?.message || e}`); if (manual) aviso(CONFIG.nombre, 'No se pudo buscar actualizaciones. Revisa la conexión.') })
+  if (manual) actualizacion.manual = true
+}
 function buscarActualizaciones() {
   if (!app.isPackaged || PRUEBA || !CONFIG.actualizaciones) return
-  try {
-    const { autoUpdater } = require('electron-updater')
-    autoUpdater.on('update-downloaded', (info) => {
-      if (Notification.isSupported()) new Notification({ title: `${CONFIG.nombre} ${info.version}`, body: 'Hay una versión nueva: se instala al cerrar la app.', icon: ICONO }).show()
-    })
-    autoUpdater.checkForUpdates().catch(() => {})
-    setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 60 * 60 * 1000)
-  } catch {}
+  try { actualizador = require('electron-updater').autoUpdater } catch (e) { registrar(`sin electron-updater: ${e.message}`); return }
+  const au = actualizador
+  au.autoDownload = !MAC_SIN_FIRMA
+  au.autoInstallOnAppQuit = true
+  au.logger = { info: (m) => registrar(m), warn: (m) => registrar(`aviso: ${m}`), error: (m) => registrar(`error: ${m}`), debug() {} }
+  registrar(`versión instalada ${app.getVersion()} (${process.platform})`)
+  au.on('checking-for-update', () => fijarActualizacion({ estado: 'buscando' }))
+  au.on('update-not-available', () => {
+    if (actualizacion.manual) aviso(CONFIG.nombre, `Tienes la última versión (${app.getVersion()}).`)
+    fijarActualizacion({ estado: 'al-dia', manual: false })
+  })
+  au.on('update-available', (i) => {
+    if (MAC_SIN_FIRMA) {
+      fijarActualizacion({ estado: 'disponible', version: i.version, manual: false })
+      aviso(`${CONFIG.nombre} ${i.version}`, 'Hay una versión nueva. Toca para descargarla.', abrirPaginaVersiones)
+    } else fijarActualizacion({ estado: 'descargando', version: i.version, progreso: 0, manual: false })
+  })
+  au.on('download-progress', (p) => { const pr = Math.round(p.percent); if (pr !== actualizacion.progreso) fijarActualizacion({ progreso: pr }) })
+  au.on('update-downloaded', (i) => {
+    fijarActualizacion({ estado: 'lista', version: i.version })
+    aviso(`${CONFIG.nombre} ${i.version} está lista`, 'Toca para reiniciar y actualizar. Si no, se instala sola al cerrar la app.', instalarActualizacion)
+    if (process.env.DSH_ESCRITORIO_ACTUALIZAR_YA) setTimeout(instalarActualizacion, 500) // para pruebas automáticas
+  })
+  au.on('error', (e) => fijarActualizacion({ estado: 'error', error: String(e?.message || e).split('\n')[0].slice(0, 200), manual: false }))
+  setTimeout(() => revisarActualizaciones(), 3000)
+  setInterval(() => { if (actualizacion.estado === 'error') actualizacion.estado = 'inactivo'; revisarActualizaciones() }, 4 * 60 * 60 * 1000)
 }
+ipcMain.handle('actualizacion:estado', () => ({ ...actualizacion, version_actual: app.getVersion() }))
+ipcMain.handle('actualizacion:buscar', (ev) => { if (permitidoIpc(ev)) revisarActualizaciones(true) })
+ipcMain.handle('actualizacion:instalar', (ev) => { if (permitidoIpc(ev)) { if (actualizacion.estado === 'disponible') abrirPaginaVersiones(); else instalarActualizacion() } })
 
 // ---------- modo prueba: abrir, fotografiar en claro y oscuro, reportar y salir ----------
 async function modoPrueba() {
@@ -196,5 +265,7 @@ app.whenReady().then(() => {
 })
 app.on('activate', mostrar) // Mac: clic en el ícono del dock
 app.on('before-quit', () => { saliendo = true })
+// Apagado del sistema o cierre desde la terminal: salir bien, así se instala una actualización pendiente.
+for (const s of ['SIGTERM', 'SIGINT']) process.on(s, () => { saliendo = true; app.quit() })
 app.on('will-quit', () => globalShortcut.unregisterAll())
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' && !(CONFIG.bandeja && bandeja)) app.quit() })

@@ -68,10 +68,10 @@ export function paqueteApp(o) {
       directories: { output: 'instaladores', buildResources: 'build' },
       files: ['main.js', 'preload.js', 'escritorio.config.json', 'app/**/*', 'build/icon.png', 'package.json'],
       extraResources: [{ from: 'build/icon.png', to: 'icon.png' }],
-      artifactName: '${productName}-${version}-${os}-${arch}.${ext}',
+      artifactName: `${slug(o.nombre) || 'app'}-` + '${version}-${os}-${arch}.${ext}', // sin espacios: GitHub los cambia y rompería las actualizaciones
       win: { target: [{ target: 'nsis', arch: ['x64'] }], icon: 'build/icon.png' },
       nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, createDesktopShortcut: true, createStartMenuShortcut: true, shortcutName: o.nombre, uninstallDisplayName: o.nombre, language: '3082' },
-      mac: { target: [{ target: 'dmg', arch: ['universal'] }], icon: 'build/icon.png', category: 'public.app-category.productivity', identity: null },
+      mac: { target: [{ target: 'dmg', arch: ['universal'] }, { target: 'zip', arch: ['universal'] }], icon: 'build/icon.png', category: 'public.app-category.productivity', identity: null },
       dmg: { title: o.nombre },
       linux: { target: ['AppImage'], icon: 'build/icon.png', category: 'Office' },
       ...(o.github ? { publish: [{ provider: 'github', owner: o.github.owner, repo: o.github.repo, releaseType: 'release' }] } : {}),
@@ -81,17 +81,27 @@ export function paqueteApp(o) {
 
 export function flujoGithub({ dirRel, webDirRel, nombre }) {
   const enDir = dirRel === '.' ? '' : `\n        working-directory: ${dirRel}`
-  return `# Compila ${nombre} para Windows y Mac en los servidores de GitHub (generado por dsh-escritorio).
-# - Cada vez que subas una etiqueta escritorio-v1.2.3 se crea una versión con los instaladores
-#   y las apps instaladas se actualizan solas.
-# - También se puede lanzar a mano desde la pestaña Actions ("Run workflow"): deja los instaladores
-#   como archivos descargables de esa ejecución.
+  const sal = `${dirRel === '.' ? '' : `${dirRel}/`}instaladores`
+  return `# Compila ${nombre} para Windows, Mac y Linux en los servidores de GitHub (generado por dsh-escritorio).
+# Publicar una versión (las apps ya instaladas la descargan solas y se actualizan al cerrarse), de dos formas:
+# - Desde la web: pestaña Actions → Escritorio → Run workflow → escribe la versión (ej. 1.2.0).
+# - Con git: git tag escritorio-v1.2.0 && git push origin escritorio-v1.2.0
+# - O en Releases → "Draft a new release" con la etiqueta escritorio-v1.2.0 (los instaladores se suben solos).
+# "Run workflow" con la versión vacía solo compila (los instaladores quedan en esa ejecución).
 name: Escritorio
 
 on:
   push:
     tags: ['escritorio-v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versión a publicar, ej. 1.2.0 (mayor que la anterior). Vacío = solo compilar.'
+        required: false
+        default: ''
+
+env:
+  VERSION: \${{ startsWith(github.ref, 'refs/tags/escritorio-v') && github.ref_name || inputs.version }}
 
 permissions:
   contents: write
@@ -101,7 +111,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: \${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -115,28 +125,60 @@ ${webDirRel ? `      - name: Dependencias de la interfaz
         run: npm install --no-audit --no-fund
       - name: Interfaz${enDir}
         run: npm run web
-      - name: Versión desde la etiqueta
-        if: startsWith(github.ref, 'refs/tags/escritorio-v')${enDir}
+      - name: Versión
+        if: env.VERSION != ''${enDir}
         shell: bash
-        run: npm pkg set version="\${GITHUB_REF_NAME#escritorio-v}"
+        run: |
+          V="\${VERSION#escritorio-v}"
+          [[ "$V" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || { echo "::error::La versión debe ser como 1.2.0 (recibí '$V')"; exit 1; }
+          npm pkg set version="$V"
       - name: Mac sin Spotlight (evita que el .dmg quede "ocupado")
         if: runner.os == 'macOS'
         run: sudo mdutil -a -i off
       - name: Instaladores${enDir}
         shell: bash
         env:
-          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/escritorio-v* ]]; then PUB=always; else PUB=never; fi
-          if [[ "$RUNNER_OS" == "Windows" ]]; then npx electron-builder --win --publish $PUB; else npx electron-builder --mac --publish $PUB; fi
+          case "$RUNNER_OS" in Windows) P=--win;; macOS) P=--mac;; *) P=--linux;; esac
+          npx electron-builder $P --publish never
       - uses: actions/upload-artifact@v4
         with:
-          name: ${slug(nombre)}-\${{ runner.os }}
+          name: ${slug(nombre) || 'app'}-\${{ runner.os }}
           path: |
-            ${dirRel === '.' ? '' : `${dirRel}/`}instaladores/*.exe
-            ${dirRel === '.' ? '' : `${dirRel}/`}instaladores/*.dmg
+            ${sal}/*.exe
+            ${sal}/*.dmg
+            ${sal}/*.zip
+            ${sal}/*.AppImage
+            ${sal}/*.blockmap
+            ${sal}/latest*.yml
           if-no-files-found: error
+
+  publicar:
+    # Solo con versión, y solo si las tres compilaciones salieron bien: así nunca queda una versión a medias.
+    needs: compilar
+    if: startsWith(github.ref, 'refs/tags/escritorio-v') || inputs.version != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: salida
+          merge-multiple: true
+      - name: Versión en Releases
+        env:
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -la salida
+          V="\${VERSION#escritorio-v}"
+          T="escritorio-v$V"
+          NOTAS="Instaladores de ${nombre} $V. Windows: .exe · Mac: .dmg · Linux: .AppImage. Las apps ya instaladas se actualizan solas."
+          if gh release view "$T" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # La versión se creó a mano en Releases: se le suben los instaladores.
+            gh release upload "$T" salida/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$T" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+          else
+            gh release create "$T" salida/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "${nombre} $V" --latest --notes "$NOTAS"
+          fi
 `
 }
 
@@ -432,9 +474,12 @@ export function apply(ctx, rawConfig) {
         const pkg = JSON.parse(await readFile(path.join(dir, 'package.json'), 'utf8'))
         pkg.build.publish = [{ provider: 'github', owner: gh.owner, repo: gh.repo, releaseType: 'release' }]
         await writeFile(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n')
+        conf.publicacion = { owner: gh.owner, repo: gh.repo }
+        conf.actualizaciones = true
+        await writeFile(path.join(dir, 'escritorio.config.json'), JSON.stringify(conf, null, 2) + '\n')
       }
       return [
-        `Flujo escrito: ${path.relative(cwd, flujo).split(path.sep).join('/')} (Windows y Mac en paralelo).`,
+        `Flujo escrito: ${path.relative(cwd, flujo).split(path.sep).join('/')} (Windows, Mac y Linux en paralelo; publica solo si los tres salen bien).`,
         gh ? `Repositorio: github.com/${gh.owner}/${gh.repo}` : 'Ojo: no encontré el repositorio de GitHub en .git/config; las actualizaciones automáticas necesitan uno.',
         '',
         'Para publicar una versión (pídele aprobación al usuario antes):',
@@ -443,6 +488,8 @@ export function apply(ctx, rawConfig) {
         '  git tag escritorio-v1.0.0',
         '  git push && git push --tags',
         `Luego, en github.com/${gh ? `${gh.owner}/${gh.repo}` : '<usuario>/<repo>'}/actions se ve la compilación (unos 10 minutos) y los instaladores quedan en Releases. Para una prueba sin publicar: pestaña Actions → Escritorio → Run workflow.`,
+        'Actualizaciones: Windows y Linux se actualizan solos (descargan en segundo plano e instalan al cerrar o con "Reiniciar y actualizar" en la bandeja). Mac sin certificado de Apple avisa y abre la descarga; con certificado (Developer ID) se pone "macFirmada": true y también se actualiza solo.',
+        'Cada versión nueva necesita un número mayor: escritorio-v1.0.1, escritorio-v1.1.0…',
         'Si el repositorio es privado, las apps no podrán descargar actualizaciones sin un token: para uso interno conviene un repositorio aparte, público solo con los instaladores, o actualizar a mano.',
       ].join('\n')
     },
