@@ -1,0 +1,16 @@
+{
+  "nombre": "Academia",
+  "id": "com.appprueba.academia",
+  "ancho": 1280,
+  "alto": 820,
+  "minAncho": 420,
+  "minAlto": 520,
+  "bandeja": true,
+  "atajo": "CommandOrControl+Shift+A",
+  "actualizaciones": true,
+  "web": {
+    "carpeta": "..",
+    "comando": "npm run build -- --base=./",
+    "salida": "dist"
+  }
+}

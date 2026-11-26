@@ -1,0 +1,12 @@
+/* Color de marca del proyecto (generado por dsh-cristal).
+   Para cambiarlo, pídele al agente "cambia el color de marca a #…": recalcula las variantes
+   para que el texto siga siendo legible en claro y en oscuro. */
+:root {
+  --cr-acento-base: #0b63f6;
+  --cr-acento-texto-claro: #ffffff;
+  --cr-acento-tinta-claro: #0b5fec;
+  --cr-acento-oscuro: #4185f8;
+  --cr-acento-relleno-oscuro: #0b63f6;
+  --cr-acento-texto-oscuro: #ffffff;
+  --cr-acento-tinta-oscuro: #4488f8;
+}

@@ -1,0 +1,100 @@
+{
+  "name": "academia",
+  "productName": "Academia",
+  "version": "1.0.0",
+  "description": "Academia",
+  "author": "Academia",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "web": "node scripts/traer-web.cjs",
+    "icono": "electron scripts/icono.cjs",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "dependencies": {
+    "electron-updater": "6.3.9"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "com.appprueba.academia",
+    "productName": "Academia",
+    "directories": {
+      "output": "instaladores",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "escritorio.config.json",
+      "app/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Academia",
+      "uninstallDisplayName": "Academia",
+      "language": "3082"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.productivity",
+      "identity": null
+    },
+    "dmg": {
+      "title": "Academia"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "build/icon.png",
+      "category": "Office"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "carcardenas20-sudo",
+        "repo": "dsh-plugins",
+        "releaseType": "release"
+      }
+    ]
+  }
+}

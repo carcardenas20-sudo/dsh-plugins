@@ -1,0 +1,4 @@
+@import "tailwindcss";
+@import "./cristal/cristal.css" layer(components);
+@import "./cristal/marca.css" layer(components);
+@import "./cristal/cristal.tailwind.css";
