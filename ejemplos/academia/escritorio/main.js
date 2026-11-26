@@ -265,5 +265,7 @@ app.whenReady().then(() => {
 })
 app.on('activate', mostrar) // Mac: clic en el ícono del dock
 app.on('before-quit', () => { saliendo = true })
+// Apagado del sistema o cierre desde la terminal: salir bien, así se instala una actualización pendiente.
+for (const s of ['SIGTERM', 'SIGINT']) process.on(s, () => { saliendo = true; app.quit() })
 app.on('will-quit', () => globalShortcut.unregisterAll())
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' && !(CONFIG.bandeja && bandeja)) app.quit() })

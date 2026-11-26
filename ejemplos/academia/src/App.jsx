@@ -75,7 +75,7 @@ export default function App() {
         <a className="cr-menu-item" href="#"><Settings {...ic} />Ajustes</a>
         {act && (
           <div style={{ marginTop: "auto", padding: "12px 10px", fontSize: 12, color: "var(--cr-texto-2, #6e6e73)", display: "grid", gap: 8 }}>
-            {act.estado === "lista" && <button className="cr-boton chico" onClick={() => window.escritorio.actualizaciones.instalar()}>Actualizar a {act.version}</button>}
+            {act.estado === "lista" && <button className="cr-boton primario chico" onClick={() => window.escritorio.actualizaciones.instalar()}>Actualizar a {act.version}</button>}
             {act.estado === "descargando" && <span>Descargando {act.version}… {act.progreso ?? 0}%</span>}
             <span>Versión {act.version_actual}</span>
           </div>
