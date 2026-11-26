@@ -1,13 +1,22 @@
 # Compila Academia para Windows, Mac y Linux en los servidores de GitHub (generado por dsh-escritorio).
-# - Cada etiqueta escritorio-v1.2.3 publica la versión 1.2.3 en Releases con los instaladores y los
-#   archivos latest*.yml: las apps ya instaladas la descargan solas y se actualizan al cerrarse.
-# - "Run workflow" en la pestaña Actions compila sin publicar (los instaladores quedan en esa ejecución).
+# Publicar una versión (las apps ya instaladas la descargan solas y se actualizan al cerrarse), de dos formas:
+# - Desde la web: pestaña Actions → Escritorio → Run workflow → escribe la versión (ej. 1.2.0).
+# - Con git: git tag escritorio-v1.2.0 && git push origin escritorio-v1.2.0
+# "Run workflow" con la versión vacía solo compila (los instaladores quedan en esa ejecución).
 name: Escritorio
 
 on:
   push:
     tags: ['escritorio-v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versión a publicar, ej. 1.2.0 (mayor que la anterior). Vacío = solo compilar.'
+        required: false
+        default: ''
+
+env:
+  VERSION: ${{ startsWith(github.ref, 'refs/tags/escritorio-v') && github.ref_name || inputs.version }}
 
 permissions:
   contents: write
@@ -33,11 +42,14 @@ jobs:
       - name: Interfaz
         working-directory: ejemplos/academia/escritorio
         run: npm run web
-      - name: Versión desde la etiqueta
-        if: startsWith(github.ref, 'refs/tags/escritorio-v')
+      - name: Versión
+        if: env.VERSION != ''
         working-directory: ejemplos/academia/escritorio
         shell: bash
-        run: npm pkg set version="${GITHUB_REF_NAME#escritorio-v}"
+        run: |
+          V="${VERSION#escritorio-v}"
+          [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::La versión debe ser como 1.2.0 (recibí '$V')"; exit 1; }
+          npm pkg set version="$V"
       - name: Mac sin Spotlight (evita que el .dmg quede "ocupado")
         if: runner.os == 'macOS'
         run: sudo mdutil -a -i off
@@ -62,9 +74,9 @@ jobs:
           if-no-files-found: error
 
   publicar:
-    # Solo con etiqueta, y solo si las tres compilaciones salieron bien: así nunca queda una versión a medias.
+    # Solo con versión, y solo si las tres compilaciones salieron bien: así nunca queda una versión a medias.
     needs: compilar
-    if: startsWith(github.ref, 'refs/tags/escritorio-v')
+    if: startsWith(github.ref, 'refs/tags/escritorio-v') || inputs.version != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -76,6 +88,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ls -la salida
-          V="${GITHUB_REF_NAME#escritorio-v}"
-          gh release create "$GITHUB_REF_NAME" salida/* --repo "$GITHUB_REPOSITORY" --title "Academia $V" --latest \
+          V="${VERSION#escritorio-v}"
+          gh release create "escritorio-v$V" salida/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Academia $V" --latest \
             --notes "Instaladores de Academia $V. Windows: .exe · Mac: .dmg · Linux: .AppImage. Las apps ya instaladas se actualizan solas."
