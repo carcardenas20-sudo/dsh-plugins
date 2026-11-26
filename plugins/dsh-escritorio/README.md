@@ -1,6 +1,6 @@
 # dsh-escritorio
 
-Convierte la interfaz de tu proyecto en una **app de escritorio para Windows y Mac**, con instalador. La app es independiente: no necesita Harness, DeepSeek ni navegador.
+Convierte la interfaz de tu proyecto en una **app de escritorio para Windows y Mac**, con instalador, **automatizaciones y robots que trabajan solos** y **datos en tiempo real** con Supabase. La app es independiente: no necesita Harness, DeepSeek ni navegador.
 
 ## Qué trae la app
 
@@ -14,12 +14,49 @@ Convierte la interfaz de tu proyecto en una **app de escritorio para Windows y M
 
 La interfaz puede ser tu proyecto web (React/Vite: se compila solo), una carpeta con HTML, una web ya publicada o una página inicial nueva.
 
+## Automatizaciones y robots
+
+La app trae un motor que sigue trabajando con la ventana cerrada (desde la bandeja). Cada automatización es un archivo en `escritorio/automatizaciones/` y se dispara:
+
+| Disparador | Ejemplo |
+|---|---|
+| Horario | `{ cron: '0 18 * * 1-5' }`: lunes a viernes, 6 pm |
+| Intervalo | `{ cada: '15m' }` |
+| Carpeta vigilada | `{ carpeta: '~/Documents/Entrada', archivos: '*.csv\|*.xlsx' }` |
+| Cambio en la base de datos | `{ tabla: 'pagos', evento: 'INSERT' }` (Supabase en tiempo real) |
+| Al abrir la app / a mano / desde la interfaz | `{ alIniciar: true }` · `{ manual: true }` · `window.escritorio.automatizaciones.ejecutar(id)` |
+
+- **Robots de navegador:** entran a plataformas web, inician sesión, llenan formularios, filtran y descargan archivos. Usan el navegador que ya tiene el PC (Edge en Windows, Chrome en Mac), así que no se descarga nada más. Pueden recordar la sesión entre ejecuciones y, si fallan, guardan una foto de la pantalla.
+- **Seguras:** cada ejecución corre en un proceso aparte con tiempo máximo, así que un robot colgado nunca congela la app. Tienen reintentos con espera creciente, y si el PC estaba apagado a la hora programada corren al abrir.
+- **Encadenables:** una automatización puede lanzar otra con sus datos, avisar en la interfaz, mandar notificaciones y guardar su propio estado.
+- **Panel de Automatizaciones** (bandeja o menú de la app): estado, próxima ejecución, ejecutar, pausar, detener e historial con resultado, registro y fotos del robot.
+
+Qué decirle a DeepSeek:
+
+> Haz una automatización que de lunes a viernes a las 6 pm entre a la plataforma X, descargue el reporte de pagos de cada sede y me deje un consolidado en Documentos. Pruébala y muéstrame las pantallas del robot.
+
+> Cuando llegue un Excel a la carpeta Entrada, valídalo, súbelo a la tabla matriculas y mueve el archivo a Procesados.
+
+## Datos en tiempo real
+
+`escritorio_datos` conecta Supabase (solo con la clave pública; rechaza las secretas). Las automatizaciones usan `ctx.db` y pueden reaccionar a cambios de tablas. En la interfaz queda `src/lib/datos-en-vivo.js`:
+
+```js
+const datos = crearDatos({ url, clave })
+datos.enVivo('pagos', { filtro: { sede: 'Norte' } }, (filas) => pintar(filas)) // se actualiza solo en todos los PCs
+await datos.guardar('pagos', fila) // sin internet queda en cola y se envía al volver
+```
+
+Lo que cada usuario puede ver o cambiar lo deciden las políticas de Row Level Security en Supabase.
+
 ## Herramientas
 
 | Herramienta | Qué hace |
 |---|---|
 | `escritorio_crear` | Crea la app en `escritorio/` con nombre, ícono, bandeja y atajo. |
-| `escritorio_probar` | Instala lo necesario, abre la app de verdad, verifica errores, puente, bandeja y atajo, y devuelve capturas en claro y oscuro. |
+| `escritorio_probar` | Instala lo necesario, abre la app de verdad, verifica errores, puente, bandeja y atajo, ejecuta las automatizaciones una vez y devuelve resultados, registros, fotos de los robots y capturas en claro y oscuro. |
+| `escritorio_automatizacion` | Crea una automatización (robot, horario, carpeta, tabla…) validando el disparador y el código. |
+| `escritorio_datos` | Conecta Supabase con tiempo real para las automatizaciones y la interfaz. |
 | `escritorio_empaquetar` | Crea el instalador para tu computador (`.exe` en Windows, `.dmg` en Mac, `.AppImage` en Linux). |
 | `escritorio_publicar` | Escribe el flujo de GitHub Actions que compila Windows, Mac y Linux a la vez y publica versiones. No sube nada sin tu aprobación. |
 
@@ -50,7 +87,7 @@ Compila Windows, Mac y Linux, y publica solo si los tres salen bien. Las apps in
 
 ## Lo que conviene saber
 
-- **Peso:** unos 100 MB por app (Electron incluye su propio navegador).
+- **Peso:** unos 130 MB por app (Electron incluye su propio navegador; los robots usan el del PC).
 - **Firmas:** sin certificado, Windows muestra "Windows protegió tu PC" la primera vez (Más información → Ejecutar de todas formas) y Mac pide abrir con clic derecho → Abrir. Para quitar los avisos: certificado de Windows y cuenta de desarrollador de Apple (99 USD al año).
 - **Mac sin Mac:** el instalador de Mac se compila en GitHub Actions; para probarlo hace falta un Mac.
 - **Actualizaciones en Mac:** instalar solo exige firmar con un certificado de Apple. Sin firma, la app avisa de la versión nueva y abre la página de descarga; con firma se pone `"macFirmada": true` en `escritorio.config.json` y se actualiza sola como en Windows.
@@ -62,5 +99,5 @@ Compila Windows, Mac y Linux, y publica solo si los tres salen bien. Las apps in
 Harness Desktop: **solo desde la app**, en Plugins → Add plugin:
 
 ```
-https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.2.0.tgz
+https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.3.0.tgz
 ```
