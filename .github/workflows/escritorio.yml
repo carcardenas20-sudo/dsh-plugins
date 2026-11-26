@@ -9,7 +9,6 @@ name: Escritorio
 on:
   push:
     tags: ['escritorio-v*']
-    branches: ['prueba-escritorio'] # SOLO PRUEBA: compila sin publicar
   workflow_dispatch:
     inputs:
       version:
