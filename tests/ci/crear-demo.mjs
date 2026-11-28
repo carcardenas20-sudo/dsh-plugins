@@ -22,6 +22,14 @@ const pintar = () => { document.getElementById('s').textContent = JSON.stringify
 pintar()
 let listo; window.escritorioPruebaLista = new Promise((r) => (listo = r))
 const d = crearDatos({ url: 'https://mtnfefxgcwgkkqfsdeed.supabase.co', clave: 'sb_publishable_lOIgAO_GkmS8iuS6_APkRQ_rbiuUcRD' })
+// WebSocket directo (para saber si el visor web abre wss:// por su cuenta)
+try {
+  const ws = new WebSocket('wss://mtnfefxgcwgkkqfsdeed.supabase.co/realtime/v1/websocket?apikey=sb_publishable_lOIgAO_GkmS8iuS6_APkRQ_rbiuUcRD&vsn=1.0.0')
+  estado.ws = 'abriendo'
+  ws.onopen = () => { estado.ws = 'abierto'; pintar() }
+  ws.onerror = (e) => { estado.ws = 'error'; pintar() }
+  ws.onclose = (e) => { estado.ws = (estado.ws || '') + ' cerrado:' + e.code + ':' + (e.reason || ''); pintar() }
+} catch (e) { estado.ws = 'excepcion:' + e.message }
 const revisar = () => { pintar(); if (estado.conexion === 'en-linea' && estado.config && estado.vacia) listo() }
 d.alCambiarConexion((c) => { estado.conexion = c.estado; revisar() })
 d.enVivo('app_config', {}, (f, i) => { estado.config = i.origen === 'servidor' || i.origen === 'tiempo-real' ? 'servidor:' + f.length : null; revisar() })

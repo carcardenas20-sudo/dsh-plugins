@@ -84,6 +84,8 @@ jobs:
           path: |
             demo/.prueba/*.png
             demo/.prueba/resultado.json
+            demo/.prueba/datos/*.log
+            demo/.prueba/datos/automatizaciones/*.log
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:

@@ -159,14 +159,23 @@ fn ruta_node(e: &Estado) -> PathBuf {
     [dir.join(nombre), e.recursos.join(nombre)].into_iter().find(|p| p.exists()).unwrap_or_else(|| PathBuf::from(nombre))
 }
 
+// Windows: Tauri entrega rutas como \\?\C:\..., que Node no siempre acepta para cargar módulos.
+fn ruta_simple(p: &Path) -> PathBuf {
+    let t = p.to_string_lossy();
+    match t.strip_prefix(r"\\?\") {
+        Some(r) if !r.starts_with("UNC") => PathBuf::from(r),
+        _ => p.to_path_buf(),
+    }
+}
+
 fn iniciar_motor(app: &AppHandle) -> Option<Arc<Motor>> {
     let e = app.state::<Estado>();
     let script = e.recursos.join("motor").join("servidor.cjs");
     if !script.exists() || !e.recursos.join("automatizaciones").exists() {
         return None;
     }
-    let mut cmd = Command::new(ruta_node(&e));
-    cmd.arg(&script).arg(&e.recursos).arg(e.datos.join("automatizaciones")).env("DSH_EQUIPO", &e.equipo).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut cmd = Command::new(ruta_simple(&ruta_node(&e)));
+    cmd.arg(ruta_simple(&script)).arg(ruta_simple(&e.recursos)).arg(ruta_simple(&e.datos.join("automatizaciones"))).current_dir(ruta_simple(&e.recursos)).env("DSH_EQUIPO", &e.equipo).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
