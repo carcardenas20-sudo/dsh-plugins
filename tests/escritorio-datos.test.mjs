@@ -1,7 +1,8 @@
 // Lógica de datos-en-vivo.js (filtros, tiempo real, copia local, cola sin internet, conexión, sesión) con un Supabase simulado.
 import assert from 'node:assert/strict'
 const ls = new Map(); globalThis.localStorage = { getItem: (k) => ls.get(k) ?? null, setItem: (k, v) => ls.set(k, v) }
-const evs = {}; globalThis.window = { addEventListener: (n, f) => ((evs[n] ||= []).push(f)), removeEventListener() {} }
+const evs = {}; const escritorioRecibio = []
+globalThis.window = { addEventListener: (n, f) => ((evs[n] ||= []).push(f)), removeEventListener() {}, escritorio: { automatizaciones: { sesion: (s, info) => escritorioRecibio.push({ s, info }) } } }
 Object.defineProperty(globalThis, 'navigator', { value: { onLine: true }, configurable: true, writable: true })
 import { mkdtemp, readFile, writeFile, copyFile } from 'node:fs/promises'
 import os from 'node:os'
@@ -38,5 +39,10 @@ let ses = []; d.sesion.alCambiar((u, p) => ses.push([u?.email ?? null, p?.sede ?
 assert.deepEqual(await d.sesion.entrar('a@b.co', 'mala'), { ok: false, error: 'Correo o clave incorrectos.' })
 assert.deepEqual(await d.sesion.entrar('a@b.co', 'bien123'), { ok: true }); await espera()
 assert.deepEqual(ses.at(-1), ['a@b.co', 'Norte']); assert.equal(d.sesion.esAdmin(), false)
+assert.equal(d.sesion.puede('pagos', 'crear'), true); assert.equal(d.sesion.puede('pagos', 'borrar'), false); assert.equal(d.sesion.alcance('pagos'), 'sede')
+assert.equal(d.sesion.puedeAutomatizacion('descargar-pagos'), true); assert.equal(d.sesion.puedeAutomatizacion('respaldo'), false); assert.equal(d.sesion.gestionaUsuarios(), false)
+assert.deepEqual(escritorioRecibio.at(-1).info, { id: 'u1', nombre: 'Laura', rol: 'cajero', sede: 'Norte', permisos: undefined, automatizaciones: ['descargar-pagos'], gestionaUsuarios: false })
+assert.equal(escritorioRecibio.at(-1).s.user.email, 'a@b.co')
 await d.sesion.salir(); await espera(); assert.deepEqual(ses.at(-1), [null, null])
+assert.equal(escritorioRecibio.at(-1).info, null)
 parar(); console.log('datos-en-vivo: ok (filtro, orden, insert/update/delete en vivo, copia local, cola, conexión, sesión)')

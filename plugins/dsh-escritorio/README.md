@@ -37,46 +37,52 @@ Qué decirle a DeepSeek:
 
 > Cuando llegue un Excel a la carpeta Entrada, valídalo, súbelo a la tabla matriculas y mueve el archivo a Procesados.
 
-## Varios equipos con datos en tiempo real
+## Varios equipos, usuarios y roles
 
-Pensado para una app instalada en varios PCs (por ejemplo 4 sedes) que comparten la misma información al instante. Usa Supabase.
+Pensado para una app instalada en varios PCs (por ejemplo 4 sedes) que comparten la información al instante, con usuarios y permisos. Usa Supabase.
 
 Qué decirle a DeepSeek:
 
-> Conecta la app a Supabase (url y clave pública) con las tablas aprendices y pagos. Cada sede ve solo lo suyo y el administrador ve todo.
+> Conecta la app a Supabase con las tablas aprendices y pagos. Roles: cajero (ve y registra pagos de su sede, puede correr la descarga de pagos) y gerente (ve todo y administra usuarios). Pon la pantalla de usuarios para el admin.
 
-`escritorio_datos` hace esto:
+**Lo que queda listo**
 
-- **Tablas con permisos por fila.** Genera `supabase/escritorio.sql` con cada tabla y sus columnas automáticas (id, quién la creó, creada, actualizada). El acceso puede ser:
-  - `autenticados`: cualquiera con sesión.
-  - `propietario`: cada quien sus filas.
-  - `por-columna`: cada sede o área ve solo lo suyo, según su perfil.
-  - `solo-lectura`: todos leen y solo el administrador escribe.
-- **Perfiles de usuario.** Crea la tabla `perfiles` con rol (admin o usuario) y sede. Se llena sola al crear cada usuario, y nadie puede subirse de rol.
-- **Tiempo real** activado en las tablas. El SQL se puede correr varias veces sin romper nada, y si cambias el acceso de una tabla no deja reglas viejas abiertas.
-- **Aplicar el SQL:** si el PC tiene la variable `SUPABASE_ACCESS_TOKEN`, lo aplica solo. Si no, se pega en Supabase → SQL Editor.
-- **En la interfaz** quedan:
-  - `src/lib/datos.js`: la conexión única de la app.
-  - `datos-en-vivo.js`: lecturas en vivo, copia local, cola sin internet y sesión.
-  - `escritorio-ui.js`: tres componentes listos, que funcionan con React, Vue o HTML:
-
-```html
-<acceso-escritorio>   <!-- pantalla de inicio de sesión hasta que haya sesión -->
-  <header> … <estado-conexion></estado-conexion> <usuario-escritorio></usuario-escritorio> </header>
-  … tu app …
-</acceso-escritorio>
-```
+- **Roles con permisos por tabla.** Para cada tabla se elige qué puede hacer el rol (ver, crear, cambiar, borrar) y sobre qué: todo, solo su sede o solo lo suyo. El rol `admin` siempre existe y lo puede todo.
+- **Los permisos son datos, no código.** El administrador los cambia desde la app y aplican al instante en todos los equipos. La base de datos los hace cumplir, no solo la pantalla.
+- **Usuarios creados dentro de la app** con `<admin-usuarios>`:
+  - crear con rol y sede, cambiar rol o sede, desactivar (bloquea el inicio de sesión), clave nueva y borrar;
+  - pestaña de roles y permisos, y pestaña de actividad con las automatizaciones de todos los equipos.
+  - Funciona con una función del servidor (`supabase/functions/gestionar-usuarios`), así la clave secreta nunca va en el instalador.
+- **Reglas de seguridad.** Quien gestiona usuarios no puede nombrar administradores, ni cambiarse su propio rol, ni tocar a un admin.
+- **Automatizaciones por rol.** Cada rol tiene la lista de las que puede ejecutar, y las demás ni se muestran. Sin sesión iniciada no corre nada.
+- **Varios equipos sin duplicar.** Una tarea programada o una reacción a cambios de tabla corre en **un solo** equipo por turno, aunque la app esté abierta en los 4.
+  - `unaVez: false` la hace correr en cada equipo (por ejemplo respaldos locales).
+  - `correEn: { sede: 'Norte' }` la fija a ciertos equipos.
+- **Registro de corridas.** Cada corrida queda en la base con el equipo donde pasó.
+- **Inicio de sesión, usuario y estado de conexión** listos: `<acceso-escritorio>`, `<usuario-escritorio>` y `<estado-conexion>`.
 
 ```js
 import { datos } from './lib/datos.js'
 datos.enVivo('pagos', { orden: 'fecha' }, (filas) => pintar(filas)) // se actualiza solo en todos los PCs
-await datos.guardar('pagos', fila)  // sin internet queda en cola y se sube al volver
-datos.sesion.perfil()               // { rol, sede, … }
+await datos.guardar('pagos', fila)                                  // sin internet queda en cola
+datos.sesion.puede('pagos', 'borrar')                               // para mostrar u ocultar botones
 ```
 
-El indicador muestra "En línea", "Sin conexión · 3 cambios por subir" o "Reconectando…".
+**Puesta en marcha (una vez)**
 
-**Seguridad:** dentro de la app solo va la clave pública. Lo que cada quien puede ver o cambiar lo deciden los permisos en la base de datos. Nunca metas en una app instalable una cadena de conexión directa a Postgres (Neon, o la clave de la base de Supabase), porque cualquiera la saca del instalador.
+1. Si el PC tiene `SUPABASE_ACCESS_TOKEN`, el plugin aplica solo el SQL y la función. Si no, pégalos en el SQL Editor y en Edge Functions.
+2. Crea tu usuario en Supabase → Authentication y hazte admin con la línea del final del SQL.
+3. Entra a la app: desde **Usuarios** creas a todos los demás.
+
+## Página pública de descargas
+
+`escritorio_publicar` deja una página en `https://<usuario>.github.io/<repo>/`:
+
+- detecta Windows, Mac o Linux y ofrece el instalador correcto;
+- muestra la versión y siempre apunta a la última publicada;
+- explica en español qué hacer con el aviso de Windows o de Mac.
+
+Se publica sola con cada versión. Solo hay que activar GitHub Pages una vez (Settings → Pages → Source: GitHub Actions). El repositorio debe ser **público** para que las descargas y las actualizaciones funcionen.
 
 ## Herramientas
 
@@ -85,7 +91,7 @@ El indicador muestra "En línea", "Sin conexión · 3 cambios por subir" o "Reco
 | `escritorio_crear` | Crea la app en `escritorio/` con nombre, ícono, bandeja y atajo. |
 | `escritorio_probar` | Instala lo necesario, abre la app de verdad, verifica errores, puente, bandeja y atajo, ejecuta las automatizaciones una vez y devuelve resultados, registros, fotos de los robots y capturas en claro y oscuro. |
 | `escritorio_automatizacion` | Crea una automatización (robot, horario, carpeta, tabla…) validando el disparador y el código. |
-| `escritorio_datos` | Conecta Supabase para varios equipos: tablas con permisos por fila, perfiles con rol y sede, tiempo real, inicio de sesión, usuario y estado de conexión. |
+| `escritorio_datos` | Conecta Supabase para varios equipos: tablas, roles con permisos por tabla y por automatización, usuarios creados desde la app, tiempo real, inicio de sesión y estado de conexión. |
 | `escritorio_empaquetar` | Crea el instalador para tu computador (`.exe` en Windows, `.dmg` en Mac, `.AppImage` en Linux). |
 | `escritorio_publicar` | Escribe el flujo de GitHub Actions que compila Windows, Mac y Linux a la vez y publica versiones. No sube nada sin tu aprobación. |
 
@@ -128,5 +134,5 @@ Compila Windows, Mac y Linux, y publica solo si los tres salen bien. Las apps in
 Harness Desktop: **solo desde la app**, en Plugins → Add plugin:
 
 ```
-https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.4.0.tgz
+https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.5.0.tgz
 ```

@@ -28,7 +28,7 @@ contextBridge.exposeInMainWorld('escritorio', {
     cancelar: (id) => ipcRenderer.invoke('auto:cancelar', id),
     historial: (id, n) => ipcRenderer.invoke('auto:historial', id, n),
     /** Pasa la sesión de Supabase del usuario (supabase.auth.getSession()) para que las automatizaciones actúen como él. */
-    sesion: (s) => ipcRenderer.invoke('auto:sesion', s ? { access_token: s.access_token, refresh_token: s.refresh_token } : null),
+    sesion: (s, info) => ipcRenderer.invoke('auto:sesion', s ? { access_token: s.access_token, refresh_token: s.refresh_token } : null, info ? JSON.parse(JSON.stringify(info)) : null),
     abrirPanel: (id) => ipcRenderer.invoke('auto:panel', id),
     abrirArchivo: (f) => ipcRenderer.invoke('auto:abrir-archivo', f),
     /** Cambios de estado: alCambiar((lista) => …) */

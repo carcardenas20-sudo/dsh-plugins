@@ -9,6 +9,7 @@
 //   <acceso-escritorio>   … toda tu app aquí: solo se muestra con sesión iniciada …   </acceso-escritorio>
 //   <estado-conexion></estado-conexion>      "En línea" · "Sin conexión · 3 cambios por subir" · "Reconectando…"
 //   <usuario-escritorio></usuario-escritorio> nombre, rol y botón Salir
+//   <admin-usuarios></admin-usuarios>         usuarios, roles y permisos, y actividad de automatizaciones (solo quien gestiona usuarios)
 //
 // Usa los colores de Cristal si están (--cr-acento, --cr-superficie…); si no, trae los suyos, con modo oscuro.
 
@@ -158,10 +159,198 @@ class UsuarioEscritorio extends HTMLElement {
   disconnectedCallback() { this._parar?.() }
 }
 
-/** Registra los componentes con tus datos. opciones: { titulo, subtitulo, logo, registro } */
+const ACCIONES = [['leer', 'Ver'], ['crear', 'Crear'], ['cambiar', 'Cambiar'], ['borrar', 'Borrar']]
+const fechaCorta = (iso) => (iso ? new Intl.DateTimeFormat('es', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : '—')
+const claveSugerida = () => { const c = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const a = new Uint32Array(12); crypto.getRandomValues(a); return [...a].map((x) => c[x % c.length]).join('') }
+
+class AdminUsuarios extends HTMLElement {
+  connectedCallback() {
+    if (this.shadowRoot) return
+    this.r = this.attachShadow({ mode: 'open' })
+    this.pestana = 'usuarios'
+    this.usuarios = []; this.roles = []; this.corridas = []; this.autos = []
+    this.rolElegido = null; this.nuevo = false; this.mensaje = null
+    this._parar = DATOS.sesion.alCambiar(() => this.cargar())
+  }
+  disconnectedCallback() { this._parar?.() }
+  get tablas() { return OPCIONES.tablas || [] }
+  get campos() { return OPCIONES.camposPerfil || [] }
+  avisar(texto, tipo = 'ok') { this.mensaje = { texto, tipo }; this.pintar(); clearTimeout(this._t); this._t = setTimeout(() => { this.mensaje = null; this.pintar() }, tipo === 'ok' ? 2600 : 6000) }
+  async cargar() {
+    if (!DATOS.sesion.usuario() || !DATOS.sesion.gestionaUsuarios()) return this.pintar()
+    const [u, r, c, a] = await Promise.all([DATOS.admin.usuarios.listar(), DATOS.admin.roles.listar(), DATOS.admin.corridas(60), window.escritorio?.automatizaciones?.lista?.().catch(() => []) ?? []])
+    if (u.ok) this.usuarios = u.usuarios; else this.mensaje = { texto: u.error, tipo: 'error' }
+    if (r.ok) this.roles = r.roles
+    if (c.ok) this.corridas = c.corridas
+    this.autos = a || []
+    if (!this.rolElegido || !this.roles.find((x) => x.nombre === this.rolElegido.nombre)) this.rolElegido = this.roles.find((x) => x.nombre !== 'admin') ? structuredClone(this.roles.find((x) => x.nombre !== 'admin')) : null
+    this.pintar()
+  }
+  pintar() {
+    const r = this.r
+    const puede = DATOS.sesion.usuario() && DATOS.sesion.gestionaUsuarios()
+    const soyAdmin = DATOS.sesion.esAdmin()
+    const valores = OPCIONES.valores || {}
+    const campoInput = (c, valor, extra = '') => valores[c]?.length
+      ? `<select data-campo="${esc(c)}" ${extra}><option value="">—</option>${valores[c].map((v) => `<option ${v === valor ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`
+      : `<input data-campo="${esc(c)}" value="${esc(valor || '')}" placeholder="${esc(c)}" ${extra}>`
+    const rolesAsignables = this.roles.filter((x) => soyAdmin || x.nombre !== 'admin')
+    r.innerHTML = `<style>${ESTILO_BASE}
+      :host { display: block; }
+      .caja { background: var(--sup); border: 1px solid var(--borde); border-radius: var(--r); overflow: hidden; }
+      .cab { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--borde); flex-wrap: wrap; }
+      h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
+      .tabs { display: inline-flex; background: color-mix(in srgb, var(--txt) 6%, transparent); border-radius: 999px; padding: 3px; }
+      .tabs button { border: 0; background: transparent; color: var(--txt2); padding: 6px 14px; border-radius: 999px; font-weight: 600; font-size: 13px; cursor: pointer; }
+      .tabs button[aria-selected=true] { background: var(--sup); color: var(--txt); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+      .cuerpo { padding: 14px 18px 18px; }
+      table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+      th { text-align: left; font-size: 12px; color: var(--txt2); font-weight: 600; padding: 8px 8px; border-bottom: 1px solid var(--borde); }
+      td { padding: 9px 8px; border-bottom: 1px solid var(--borde); vertical-align: middle; }
+      tr.inactivo td { opacity: .5; }
+      .quien b { display: block; font-weight: 600; } .quien span { color: var(--txt2); font-size: 12.5px; }
+      select, input:not([type=checkbox]) { font: inherit; font-size: 13px; padding: 6px 9px; border-radius: 9px; border: 1px solid var(--borde); background: var(--fondo); color: var(--txt); max-width: 170px; }
+      .btn { border: 1px solid var(--borde); background: transparent; color: var(--txt); border-radius: 999px; padding: 6px 13px; font-weight: 600; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+      .btn.prim { background: var(--a); color: var(--a-txt); border-color: transparent; }
+      .btn.peligro { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); }
+      .btn:disabled { opacity: .45; cursor: default; }
+      .interruptor { position: relative; width: 38px; height: 22px; border-radius: 999px; background: color-mix(in srgb, var(--txt) 18%, transparent); border: 0; cursor: pointer; transition: background .2s; }
+      .interruptor::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .2s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+      .interruptor[aria-checked=true] { background: var(--ok); } .interruptor[aria-checked=true]::after { transform: translateX(16px); }
+      .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; padding: 14px; border: 1px dashed var(--borde); border-radius: 14px; margin-bottom: 14px; }
+      .form label { font-size: 12px; font-weight: 600; color: var(--txt2); display: grid; gap: 4px; } .form input, .form select { max-width: none; width: 100%; box-sizing: border-box; }
+      .msg { margin: 0 0 12px; padding: 9px 12px; border-radius: 10px; font-size: 13px; }
+      .msg.ok { background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ok); } .msg.error { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
+      .roles { display: grid; grid-template-columns: 190px 1fr; gap: 18px; }
+      .lista-roles button { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 9px 11px; border-radius: 10px; color: var(--txt); font-weight: 600; font-size: 13.5px; cursor: pointer; }
+      .lista-roles button[aria-current=true] { background: color-mix(in srgb, var(--a) 12%, transparent); color: var(--a); }
+      .lista-roles small { display: block; color: var(--txt2); font-weight: 500; font-size: 12px; }
+      .matriz td, .matriz th { text-align: center; } .matriz td:first-child, .matriz th:first-child { text-align: left; }
+      input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--a); }
+      .autos { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 6px; font-size: 13px; } .autos label { display: inline-flex; gap: 6px; align-items: center; }
+      h3 { font-size: 13px; color: var(--txt2); margin: 18px 0 6px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
+      .chip { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+      .chip.ok { background: color-mix(in srgb, var(--ok) 13%, transparent); color: var(--ok); } .chip.mal { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
+      .vacio { color: var(--txt2); padding: 24px 0; text-align: center; }
+      @media (max-width: 760px) { .roles { grid-template-columns: 1fr; } .oculto-movil { display: none; } }
+    </style>
+    <div class="caja">
+      <div class="cab"><h2>Usuarios y roles</h2>${puede ? `<div class="tabs" role="tablist">${[['usuarios', 'Usuarios'], ['roles', 'Roles y permisos'], ['actividad', 'Actividad']].map(([k, v]) => `<button role="tab" data-tab="${k}" aria-selected="${this.pestana === k}">${v}</button>`).join('')}</div>` : ''}</div>
+      <div class="cuerpo">
+      ${this.mensaje ? `<div class="msg ${this.mensaje.tipo}" role="status">${esc(this.mensaje.texto)}</div>` : ''}
+      ${!puede ? '<div class="vacio">Tu rol no puede administrar usuarios.</div>'
+        : this.pestana === 'usuarios' ? `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><span style="color:var(--txt2);font-size:13px">${this.usuarios.length} usuario${this.usuarios.length === 1 ? '' : 's'}</span><button class="btn prim" data-accion="nuevo">${this.nuevo ? 'Cancelar' : '+ Nuevo usuario'}</button></div>
+        ${this.nuevo ? `<form class="form" data-form="nuevo">
+          <label>Nombre<input name="nombre" required></label>
+          <label>Correo<input name="correo" type="email" required></label>
+          <label>Clave inicial<input name="clave" value="${claveSugerida()}" required minlength="8"></label>
+          <label>Rol<select name="rol">${rolesAsignables.map((x) => `<option ${x.nombre === 'usuario' ? 'selected' : ''}>${esc(x.nombre)}</option>`).join('')}</select></label>
+          ${this.campos.map((c) => `<label>${esc(c[0].toUpperCase() + c.slice(1))}${campoInput(c, '', `name="campo-${esc(c)}"`)}</label>`).join('')}
+          <button class="btn prim" type="submit">Crear usuario</button>
+        </form>` : ''}
+        <table><thead><tr><th>Usuario</th><th>Rol</th>${this.campos.map((c) => `<th>${esc(c[0].toUpperCase() + c.slice(1))}</th>`).join('')}<th>Activo</th><th class="oculto-movil">Último ingreso</th><th></th></tr></thead><tbody>
+        ${this.usuarios.map((u) => { const bloqueado = (u.rol === 'admin' && !soyAdmin); return `<tr data-id="${esc(u.id)}" class="${u.activo ? '' : 'inactivo'}">
+          <td class="quien"><b>${esc(u.nombre || '—')}${u.soyYo ? ' (tú)' : ''}</b><span>${esc(u.correo || '')}</span></td>
+          <td><select data-rol ${u.soyYo || bloqueado ? 'disabled' : ''}>${(bloqueado ? this.roles : rolesAsignables).map((x) => `<option ${x.nombre === u.rol ? 'selected' : ''}>${esc(x.nombre)}</option>`).join('')}</select></td>
+          ${this.campos.map((c) => `<td>${campoInput(c, u[c], bloqueado ? 'disabled' : '')}</td>`).join('')}
+          <td><button class="interruptor" role="switch" aria-label="Activo" aria-checked="${!!u.activo}" data-activo ${u.soyYo || bloqueado ? 'disabled' : ''}></button></td>
+          <td class="oculto-movil" style="color:var(--txt2)">${fechaCorta(u.ultimoIngreso)}</td>
+          <td style="text-align:right;white-space:nowrap">${bloqueado ? '' : `<button class="btn" data-accion="clave">Nueva clave</button>${soyAdmin && !u.soyYo ? ` <button class="btn peligro" data-accion="borrar">${this.confirmar === u.id ? '¿Seguro?' : 'Borrar'}</button>` : ''}`}</td>
+        </tr>` }).join('')}
+        </tbody></table>`
+        : this.pestana === 'roles' ? this.pintarRoles(soyAdmin)
+        : `${this.corridas.length ? `<table><thead><tr><th>Cuándo</th><th>Automatización</th><th>Equipo</th><th>Resultado</th></tr></thead><tbody>${this.corridas.map((c) => `<tr><td>${fechaCorta(c.fin)}</td><td>${esc(c.nombre || c.automatizacion)}</td><td>${esc(c.equipo || '')}</td><td>${c.ok ? '<span class="chip ok">Bien</span>' : `<span class="chip mal">Falló</span> <span style="color:var(--txt2);font-size:12.5px">${esc((c.error || '').slice(0, 120))}</span>`}</td></tr>`).join('')}</tbody></table>` : '<div class="vacio">Todavía no hay corridas de automatizaciones.</div>'}`}
+      </div>
+    </div>`
+    this.conectar()
+  }
+  pintarRoles(soyAdmin) {
+    const rol = this.rolElegido
+    const conSede = (t) => t.sede || t.columnaAcceso
+    return `<div class="roles">
+      <div class="lista-roles">${this.roles.map((x) => `<button data-rol-elegir="${esc(x.nombre)}" aria-current="${rol?.nombre === x.nombre}">${esc(x.nombre)}<small>${esc(x.descripcion || (x.nombre === 'admin' ? 'Todo' : ''))}</small></button>`).join('')}
+        ${soyAdmin ? '<form data-form="rol" style="margin-top:10px;display:flex;gap:6px"><input name="nombre" placeholder="Nuevo rol" aria-label="Nombre del rol nuevo" style="flex:1;max-width:none;min-width:0"><button class="btn">+</button></form>' : ''}</div>
+      <div>${!rol ? '<div class="vacio">Elige un rol.</div>' : rol.nombre === 'admin' ? '<div class="vacio">El administrador puede todo: datos, usuarios, roles y automatizaciones.</div>' : `
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b style="font-size:16px">${esc(rol.nombre)}</b><input data-desc value="${esc(rol.descripcion || '')}" placeholder="Descripción" style="flex:1;max-width:none" ${soyAdmin ? '' : 'disabled'}></div>
+        <h3>Datos</h3>
+        <table class="matriz"><thead><tr><th>Tabla</th>${ACCIONES.map(([, v]) => `<th>${v}</th>`).join('')}<th>Alcance</th></tr></thead><tbody>
+        ${this.tablas.map((t) => { const p = rol.permisos?.[t.nombre] || { acciones: [], alcance: 'todo' }; return `<tr data-tabla="${esc(t.nombre)}"><td>${esc(t.etiqueta || t.nombre)}</td>${ACCIONES.map(([k]) => `<td><input type="checkbox" data-accion-permiso="${k}" ${p.acciones?.includes(k) ? 'checked' : ''} ${soyAdmin ? '' : 'disabled'} aria-label="${k} ${esc(t.nombre)}"></td>`).join('')}
+          <td><select data-alcance ${soyAdmin ? '' : 'disabled'}><option value="todo" ${p.alcance === 'todo' ? 'selected' : ''}>Todo</option>${conSede(t) ? `<option value="sede" ${p.alcance === 'sede' ? 'selected' : ''}>Su ${esc(conSede(t) === true ? 'sede' : conSede(t))}</option>` : ''}<option value="propio" ${p.alcance === 'propio' ? 'selected' : ''}>Lo suyo</option></select></td></tr>` }).join('')}
+        </tbody></table>
+        <h3>Automatizaciones que puede ejecutar</h3>
+        <div class="autos"><label><input type="checkbox" data-auto="*" ${rol.automatizaciones?.includes('*') ? 'checked' : ''} ${soyAdmin ? '' : 'disabled'}>Todas</label>
+          ${this.autos.map((a) => `<label><input type="checkbox" data-auto="${esc(a.id)}" ${rol.automatizaciones?.includes(a.id) ? 'checked' : ''} ${soyAdmin && !rol.automatizaciones?.includes('*') ? '' : 'disabled'}>${esc(a.nombre)}</label>`).join('') || '<span style="color:var(--txt2)">Esta app no tiene automatizaciones.</span>'}</div>
+        <h3>Usuarios</h3>
+        <label class="autos"><input type="checkbox" data-gestiona ${rol.gestiona_usuarios ? 'checked' : ''} ${soyAdmin ? '' : 'disabled'}>Puede crear y administrar usuarios (no administradores)</label>
+        ${soyAdmin ? `<div style="display:flex;gap:8px;margin-top:18px"><button class="btn prim" data-accion="guardar-rol">Guardar cambios</button><button class="btn peligro" data-accion="borrar-rol">${this.confirmar === `rol:${rol.nombre}` ? '¿Seguro?' : 'Borrar rol'}</button></div>` : '<p style="color:var(--txt2);font-size:13px">Solo un administrador puede cambiar roles.</p>'}`}
+      </div></div>`
+  }
+  conectar() {
+    const r = this.r
+    r.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => { this.pestana = b.dataset.tab; this.pintar() }))
+    r.querySelector('[data-accion=nuevo]')?.addEventListener('click', () => { this.nuevo = !this.nuevo; this.pintar() })
+    r.querySelector('[data-form=nuevo]')?.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); const f = ev.target
+      const campos = Object.fromEntries(this.campos.map((c) => [c, f[`campo-${c}`]?.value || null]))
+      const res = await DATOS.admin.usuarios.crear({ nombre: f.nombre.value.trim(), correo: f.correo.value.trim(), clave: f.clave.value, rol: f.rol.value, campos })
+      if (!res.ok) return this.avisar(res.error, 'error')
+      this.nuevo = false; this.avisar(`Usuario creado. Clave inicial: ${f.clave.value}`); this.cargar()
+    })
+    r.querySelectorAll('tr[data-id]').forEach((tr) => {
+      const id = tr.dataset.id
+      const guardar = async (cambios, texto) => { const res = await DATOS.admin.usuarios.actualizar(id, cambios); if (!res.ok) { this.avisar(res.error, 'error'); return this.cargar() } this.avisar(texto); this.cargar() }
+      tr.querySelector('[data-rol]').onchange = (e) => guardar({ rol: e.target.value }, 'Rol actualizado')
+      tr.querySelectorAll('[data-campo]').forEach((el) => (el.onchange = () => guardar({ campos: { [el.dataset.campo]: el.value || null } }, 'Guardado')))
+      tr.querySelector('[data-activo]').onclick = (e) => guardar({ activo: e.currentTarget.getAttribute('aria-checked') !== 'true' }, 'Estado actualizado')
+      tr.querySelector('[data-accion=clave]')?.addEventListener('click', async () => {
+        const clave = claveSugerida(); const res = await DATOS.admin.usuarios.cambiarClave(id, clave)
+        this.avisar(res.ok ? `Clave nueva para ${this.usuarios.find((u) => u.id === id)?.correo}: ${clave}` : res.error, res.ok ? 'ok' : 'error')
+      })
+      tr.querySelector('[data-accion=borrar]')?.addEventListener('click', async () => {
+        if (this.confirmar !== id) { this.confirmar = id; return this.pintar() }
+        this.confirmar = null; const res = await DATOS.admin.usuarios.borrar(id); this.avisar(res.ok ? 'Usuario borrado' : res.error, res.ok ? 'ok' : 'error'); this.cargar()
+      })
+    })
+    r.querySelectorAll('[data-rol-elegir]').forEach((b) => (b.onclick = () => { this.rolElegido = structuredClone(this.roles.find((x) => x.nombre === b.dataset.rolElegir)); this.confirmar = null; this.pintar() }))
+    r.querySelector('[data-form=rol]')?.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); const nombre = ev.target.nombre.value.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_')
+      if (!nombre) return
+      if (this.roles.find((x) => x.nombre === nombre)) return this.avisar('Ese rol ya existe', 'error')
+      const res = await DATOS.admin.roles.guardar({ nombre, permisos: {}, automatizaciones: [] })
+      if (!res.ok) return this.avisar(res.error, 'error')
+      await this.cargar(); this.rolElegido = structuredClone(this.roles.find((x) => x.nombre === nombre)); this.avisar(`Rol "${nombre}" creado: marca sus permisos`)
+    })
+    const rol = this.rolElegido
+    if (rol) {
+      r.querySelectorAll('tr[data-tabla]').forEach((tr) => {
+        const t = tr.dataset.tabla
+        const actual = () => (rol.permisos ||= {})[t] ||= { acciones: [], alcance: 'todo' }
+        tr.querySelectorAll('[data-accion-permiso]').forEach((cb) => (cb.onchange = () => { const p = actual(); const a = cb.dataset.accionPermiso; p.acciones = cb.checked ? [...new Set([...p.acciones, a, ...(a !== 'leer' ? ['leer'] : [])])] : p.acciones.filter((x) => x !== a && !(a === 'leer')); this.pintar() }))
+        tr.querySelector('[data-alcance]').onchange = (e) => { actual().alcance = e.target.value }
+      })
+      r.querySelectorAll('[data-auto]').forEach((cb) => (cb.onchange = () => { const s = new Set(rol.automatizaciones || []); cb.checked ? s.add(cb.dataset.auto) : s.delete(cb.dataset.auto); rol.automatizaciones = [...s]; this.pintar() }))
+      const g = r.querySelector('[data-gestiona]'); if (g) g.onchange = () => { rol.gestiona_usuarios = g.checked }
+      const d = r.querySelector('[data-desc]'); if (d) d.oninput = () => { rol.descripcion = d.value }
+      r.querySelector('[data-accion=guardar-rol]')?.addEventListener('click', async () => {
+        for (const [k, p] of Object.entries(rol.permisos || {})) if (!p.acciones.length) delete rol.permisos[k]
+        const res = await DATOS.admin.roles.guardar(rol); this.avisar(res.ok ? `Permisos de "${rol.nombre}" guardados: aplican de inmediato en todos los equipos` : res.error, res.ok ? 'ok' : 'error'); if (res.ok) this.cargar()
+      })
+      r.querySelector('[data-accion=borrar-rol]')?.addEventListener('click', async () => {
+        if (this.confirmar !== `rol:${rol.nombre}`) { this.confirmar = `rol:${rol.nombre}`; return this.pintar() }
+        this.confirmar = null; const res = await DATOS.admin.roles.borrar(rol.nombre); this.avisar(res.ok ? 'Rol borrado' : res.error, res.ok ? 'ok' : 'error'); if (res.ok) { this.rolElegido = null; this.cargar() }
+      })
+    }
+  }
+}
+
+/**
+ * Registra los componentes con tus datos.
+ * opciones: { titulo, subtitulo, logo, registro, tablas: [{ nombre, etiqueta, sede }], camposPerfil: ['sede'], valores: { sede: ['Norte', 'Sur'] } }
+ */
 export function conectarUI(datos, opciones = {}) {
   DATOS = datos
   OPCIONES = opciones
-  for (const [n, c] of [['acceso-escritorio', AccesoEscritorio], ['estado-conexion', EstadoConexion], ['usuario-escritorio', UsuarioEscritorio]]) if (!customElements.get(n)) customElements.define(n, c)
+  for (const [n, c] of [['acceso-escritorio', AccesoEscritorio], ['estado-conexion', EstadoConexion], ['usuario-escritorio', UsuarioEscritorio], ['admin-usuarios', AdminUsuarios]]) if (!customElements.get(n)) customElements.define(n, c)
   return datos
 }

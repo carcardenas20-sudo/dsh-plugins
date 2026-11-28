@@ -13,7 +13,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import vm from 'node:vm'
-import { ACCESOS, sqlDeTablas } from './tablas.js'
+import { ACCESOS, normalizarTablas, sqlDeTablas } from './tablas.js'
 
 export const name = 'escritorio'
 export const inject = ['tools', 'workingDirectory', 'systemPrompt']
@@ -84,7 +84,7 @@ export function paqueteApp(o) {
   }
 }
 
-export function flujoGithub({ dirRel, webDirRel, nombre }) {
+export function flujoGithub({ dirRel, webDirRel, nombre, paginaRel = null }) {
   const enDir = dirRel === '.' ? '' : `\n        working-directory: ${dirRel}`
   const sal = `${dirRel === '.' ? '' : `${dirRel}/`}instaladores`
   return `# Compila ${nombre} para Windows, Mac y Linux en los servidores de GitHub (generado por dsh-escritorio).
@@ -169,6 +169,13 @@ ${webDirRel ? `      - name: Dependencias de la interfaz
         with:
           path: salida
           merge-multiple: true
+      - name: Nombres fijos para la página de descargas (siempre la última versión)
+        run: |
+          cd salida
+          for f in *.exe; do [ "\${f%.blockmap}" = "$f" ] && cp "$f" "${slug(nombre) || 'app'}-windows.exe"; done
+          for f in *.dmg; do cp "$f" "${slug(nombre) || 'app'}-mac.dmg"; done
+          for f in *.AppImage; do cp "$f" "${slug(nombre) || 'app'}-linux.AppImage"; done
+          ls -la
       - name: Versión en Releases
         env:
           GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
@@ -184,6 +191,88 @@ ${webDirRel ? `      - name: Dependencias de la interfaz
           else
             gh release create "$T" salida/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "${nombre} $V" --latest --notes "$NOTAS"
           fi
+${paginaRel ? `
+  pagina:
+    # Página pública de descargas en GitHub Pages (actívala una vez: Settings → Pages → Source: GitHub Actions).
+    needs: publicar
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: \${{ steps.despliegue.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${paginaRel}
+      - id: despliegue
+        uses: actions/deploy-pages@v4
+` : ''}`
+}
+
+/** Página pública de descargas: detecta el sistema y apunta siempre a la última versión publicada. */
+export function paginaDescargas({ nombre, owner, repo, color = '#0a66ff', descripcion = '' }) {
+  const s = slug(nombre) || 'app'
+  const base = `https://github.com/${owner}/${repo}/releases/latest/download`
+  const e = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+  return `<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Descargar ${e(nombre)}</title>
+<meta name="description" content="Descarga ${e(nombre)} para Windows y Mac. Se actualiza sola.">
+<link rel="icon" href="icono.png">
+<style>
+:root{--fondo:#f5f5f7;--sup:#fff;--tinta:#1d1d1f;--suave:#6e6e73;--borde:rgba(0,0,0,.08);--acento:${e(color)};color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--fondo:#000;--sup:#1c1c1e;--tinta:#f5f5f7;--suave:#98989d;--borde:rgba(255,255,255,.1)}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--fondo);color:var(--tinta);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+main{width:min(720px,calc(100% - 32px));margin:0 auto;padding:72px 0 48px;text-align:center}
+.icono{width:96px;height:96px;border-radius:24px;box-shadow:0 12px 40px rgba(0,0,0,.18);margin:0 auto 22px;display:block;background:var(--acento)}
+h1{font-size:clamp(34px,6vw,52px);letter-spacing:-.03em;margin:0 0 8px;line-height:1.05}
+.sub{color:var(--suave);font-size:19px;margin:0 auto 30px;max-width:520px}
+.principal{display:inline-flex;align-items:center;gap:10px;background:var(--acento);color:#fff;text-decoration:none;font-weight:650;font-size:17px;padding:15px 28px;border-radius:999px;box-shadow:0 8px 24px color-mix(in srgb,var(--acento) 35%,transparent);transition:transform .15s,filter .15s}
+.principal:hover{filter:brightness(1.07);transform:translateY(-1px)}.principal:active{transform:scale(.98)}
+.version{color:var(--suave);font-size:14px;margin-top:14px;min-height:21px}
+.otros{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:44px 0 0;text-align:left}
+.otro{background:var(--sup);border:1px solid var(--borde);border-radius:18px;padding:18px;text-decoration:none;color:inherit;transition:border-color .15s}
+.otro:hover{border-color:var(--acento)}.otro b{display:block;font-size:16px}.otro span{color:var(--suave);font-size:14px}
+.ayuda{background:var(--sup);border:1px solid var(--borde);border-radius:18px;padding:20px 22px;margin-top:28px;text-align:left;font-size:14.5px;color:var(--suave)}
+.ayuda b{color:var(--tinta)}.ayuda p{margin:6px 0}
+footer{color:var(--suave);font-size:13px;margin-top:36px}footer a{color:var(--suave)}
+</style></head><body><main>
+<img class="icono" src="icono.png" alt="" onerror="this.removeAttribute('src')">
+<h1>${e(nombre)}</h1>
+<p class="sub">${e(descripcion || 'La app de escritorio. Instálala una vez y se actualiza sola.')}</p>
+<a class="principal" id="principal" href="${base}/${s}-windows.exe">Descargar para Windows</a>
+<div class="version" id="version"></div>
+<div class="otros">
+  <a class="otro" href="${base}/${s}-windows.exe"><b>Windows</b><span>Windows 10 y 11 · .exe</span></a>
+  <a class="otro" href="${base}/${s}-mac.dmg"><b>Mac</b><span>Intel y Apple (M1–M4) · .dmg</span></a>
+  <a class="otro" href="${base}/${s}-linux.AppImage"><b>Linux</b><span>.AppImage</span></a>
+</div>
+<div class="ayuda">
+  <p><b>Windows:</b> si aparece "Windows protegió su PC", toca <b>Más información → Ejecutar de todos modos</b>. Pasa solo la primera vez.</p>
+  <p><b>Mac:</b> la primera vez abre la app con clic derecho → <b>Abrir</b>.</p>
+  <p><b>Actualizaciones:</b> la app busca versiones nuevas sola y se actualiza al cerrarla. No tienes que volver a esta página.</p>
+</div>
+<footer><a href="https://github.com/${owner}/${repo}/releases">Todas las versiones</a></footer>
+</main>
+<script>
+(function(){
+  var ua = navigator.userAgent, base = ${JSON.stringify(base)}, s = ${JSON.stringify(s)}
+  var so = /Mac|iPhone|iPad/.test(ua) ? 'mac' : /Linux/.test(ua) && !/Android/.test(ua) ? 'linux' : 'windows'
+  var b = document.getElementById('principal')
+  b.href = base + '/' + s + (so === 'mac' ? '-mac.dmg' : so === 'linux' ? '-linux.AppImage' : '-windows.exe')
+  b.textContent = 'Descargar para ' + (so === 'mac' ? 'Mac' : so === 'linux' ? 'Linux' : 'Windows')
+  fetch('https://api.github.com/repos/${owner}/${repo}/releases/latest').then(function(r){ return r.ok ? r.json() : null }).then(function(v){
+    if (!v) return
+    var f = new Date(v.published_at).toLocaleDateString('es', { day: 'numeric', month: 'long', year: 'numeric' })
+    document.getElementById('version').textContent = 'Versión ' + String(v.tag_name).replace(/^escritorio-v/, '') + ' · ' + f
+  }).catch(function(){})
+})()
+</script>
+</body></html>
 `
 }
 
@@ -247,6 +336,8 @@ const REGLAS = [
   '',
   '### Real-time data for several PCs',
   'For an app used on several computers with live shared data, use escritorio_datos with Supabase (url + public anon/publishable key only; it refuses service_role/secret keys). Pass "tablas" so it generates supabase/escritorio.sql: tables with id/creado_por/creado/actualizado, row-level security by "acceso" (autenticados · propietario · por-columna, e.g. each PC/sede sees only its rows · solo-lectura), a perfiles table with rol admin/usuario and the access column, and realtime enabled. With aplicar:true and SUPABASE_ACCESS_TOKEN on the PC it runs the SQL; otherwise tell the user to paste it in the SQL Editor, create one user per person/PC, and set the admin and each user\'s sede with the commented lines.',
+  'Users and roles: pass "roles" to escritorio_datos (admin always exists). Each role has permisos per table {acciones: leer/crear/cambiar/borrar, alcance: todo | sede | propio}, automatizaciones it may run (ids or "*") and gestionaUsuarios. Permissions are data: the admin edits them later from the app. Users are created INSIDE the app with <admin-usuarios> through the server function supabase/functions/gestionar-usuarios (deploy it; the secret key stays in Supabase). Only the first admin is created in the Supabase dashboard.',
+  'Automations with several PCs: once Supabase is connected, automations only run for a logged-in user whose role allows them; scheduled ones (cron/cada) and table triggers run on ONE PC per turn (shared turn table); set unaVez:false when each PC must run it (local backups), and correEn:{ sede:"Norte" } / { rol:"admin" } / { equipo:"CAJA-1" } to pin where it runs. Every run is logged to automatizacion_corridas (Actividad tab).',
   'In the UI: import src/lib/datos.js once; wrap the whole app in <acceso-escritorio> (login screen until there is a session), put <estado-conexion> and <usuario-escritorio> in the top bar, read with datos.enVivo(tabla, {filtro, orden}, setFilas) and write with datos.guardar/borrar (queued while offline). Never put a Postgres connection string (Neon, Supabase DB password) inside an installed app: anyone can extract it; use Supabase with RLS, or an API server in between.',
 ].join('\n')
 
@@ -509,6 +600,8 @@ export function apply(ctx, rawConfig) {
         cuando: { description: 'Disparador u objeto o lista: {cron:"0 18 * * 1-5"} · {cada:"15m"} · {carpeta:"~/Documents/Entrada", archivos:"*.csv"} · {tabla:"pagos", evento:"INSERT"} · {alIniciar:true} · {manual:true}. Por defecto manual.' },
         codigo: { type: 'string', description: 'Cuerpo de async ejecutar(ctx), con estas variables disponibles: disparo, config, registro, progreso, notificar, interfaz, ejecutar, pausa, cancelado, archivos, estado, robot, db, http. Lo que devuelva queda como resultado en el historial.' },
         tiempoMaximo: { type: 'string', description: 'Ej. "5m" (por defecto 10m).' },
+        correEn: { type: 'object', description: 'Con varios equipos: dónde se activan sus horarios/vigilantes, ej. { "sede": "Norte" }, { "rol": "admin" }, { "equipo": "CAJA-1" }.' },
+        unaVez: { type: 'boolean', description: 'Con varios equipos, false para que una tarea programada corra en CADA equipo (por defecto corre en uno solo por turno).' },
         reintentos: { type: 'number' },
         ponerseAlDia: { type: 'boolean', description: 'Con cron: si el PC estaba apagado a la hora, corre una vez al abrir.' },
         avisarExito: { type: 'boolean' },
@@ -534,7 +627,7 @@ export function apply(ctx, rawConfig) {
       const archivo = path.join(dir, 'automatizaciones', `${id}.js`)
       if (existsSync(archivo) && !args.reemplazar) return `Ya existe automatizaciones/${id}.js. Pasa reemplazar: true para sobrescribirla, o usa otro id.`
       const opciones = {}
-      for (const k of ['tiempoMaximo', 'reintentos', 'ponerseAlDia', 'avisarExito', 'avisarError', 'enPrueba']) if (args[k] !== undefined) opciones[k] = args[k]
+      for (const k of ['tiempoMaximo', 'reintentos', 'ponerseAlDia', 'avisarExito', 'avisarError', 'enPrueba', 'correEn', 'unaVez']) if (args[k] !== undefined) opciones[k] = args[k]
       if (opciones.tiempoMaximo) { try { duracion(opciones.tiempoMaximo) } catch (e) { return `❌ ${e.message}` } }
       const js = (v) => JSON.stringify(v, null, 2).replace(/\n/g, '\n  ')
       const sangrado = codigo.split('\n').map((l) => (l.trim() ? `    ${l}` : '')).join('\n')
@@ -606,7 +699,21 @@ export function apply(ctx, rawConfig) {
             },
           },
         },
-        aplicar: { type: 'boolean', description: 'true para ejecutar el SQL en Supabase ahora (necesita la variable SUPABASE_ACCESS_TOKEN en el PC). Si no, queda el archivo para pegarlo en el SQL Editor.' },
+        roles: {
+          type: 'array',
+          description: 'Roles además de admin (que siempre existe y lo puede todo). Sin roles, se crea "usuario" con permisos según el acceso de cada tabla. El admin los puede cambiar después desde la app.',
+          items: {
+            type: 'object', required: ['nombre'],
+            properties: {
+              nombre: { type: 'string' }, descripcion: { type: 'string' },
+              permisos: { type: 'object', description: '{ "<tabla>": { "acciones": ["leer","crear","cambiar","borrar"], "alcance": "todo" | "sede" | "propio" } }. "sede" = la columnaAcceso de la tabla igual a la del perfil.' },
+              automatizaciones: { type: 'array', items: { type: 'string' }, description: 'Ids de automatizaciones que puede ejecutar, o ["*"].' },
+              gestionaUsuarios: { type: 'boolean', description: 'Puede crear y administrar usuarios (no administradores).' },
+            },
+          },
+        },
+        valores: { type: 'object', description: 'Opciones fijas de los campos del perfil para la pantalla de usuarios, ej. { "sede": ["Norte", "Sur"] }.' },
+        aplicar: { type: 'boolean', description: 'true para ejecutar el SQL y publicar la función de usuarios en Supabase ahora (necesita la variable SUPABASE_ACCESS_TOKEN en el PC). Si no, quedan los archivos para pegarlos.' },
         titulo: { type: 'string', description: 'Título de la pantalla de inicio de sesión (por defecto el nombre de la app).' },
         registro: { type: 'boolean', description: 'true para permitir que la gente cree su propia cuenta (por defecto solo entra quien el admin crea).' },
         instalar: { type: 'boolean', description: 'Instala @supabase/supabase-js en el proyecto web (por defecto true).' },
@@ -630,7 +737,9 @@ export function apply(ctx, rawConfig) {
       if (!/^sb_publishable_/.test(clave) && clave.split('.').length !== 3) return '❌ No parece una clave de Supabase. Cópiala de Project Settings → API (anon / publishable).'
 
       let sql = null
-      if (args.tablas) { try { sql = sqlDeTablas(args.tablas) } catch (e) { return `❌ Tablas: ${e.message}` } }
+      if (args.roles && !args.tablas) return '❌ Para definir roles pasa también "tablas" (los permisos se dan sobre ellas).'
+      let tablasNorm = null
+      if (args.tablas) { try { sql = sqlDeTablas(args.tablas, { roles: args.roles }); tablasNorm = normalizarTablas(args.tablas) } catch (e) { return `❌ ${args.roles ? 'Tablas o roles' : 'Tablas'}: ${e.message}` } }
 
       conf.supabase = { url, clave }
       await writeFile(path.join(dir, 'escritorio.config.json'), JSON.stringify(conf, null, 2) + '\n')
@@ -646,24 +755,31 @@ export function apply(ctx, rawConfig) {
         await cp(path.join(AQUI, 'web', 'escritorio-ui.js'), path.join(carpetaLib, 'escritorio-ui.js'))
         const relLib = path.relative(cwd, carpetaLib).split(path.sep).join('/')
         const archivoDatos = path.join(carpetaLib, 'datos.js')
-        if (!existsSync(archivoDatos)) {
-          await writeFile(archivoDatos, [
-            '// Conexión única de la app a la base de datos (generado por dsh-escritorio).',
-            "import { crearDatos } from './datos-en-vivo.js'",
-            "import { conectarUI } from './escritorio-ui.js'",
-            '',
-            '// Clave PÚBLICA: lo que cada usuario ve lo deciden los permisos por fila en Supabase.',
-            `export const datos = crearDatos({ url: ${JSON.stringify(url)}, clave: ${JSON.stringify(clave)} })`,
-            `conectarUI(datos, { titulo: ${JSON.stringify(args.titulo || conf.nombre || 'Bienvenido')}, subtitulo: 'Inicia sesión para continuar', registro: ${args.registro === true} })`,
-            '',
-          ].join('\n'))
-        }
+        let anterior = null
+        try { anterior = (await readFile(archivoDatos, 'utf8')).match(/\/\/ UI: (.*)$/m)?.[1] } catch {}
+        const ui = { titulo: args.titulo || conf.nombre || 'Bienvenido', subtitulo: 'Inicia sesión para continuar', registro: args.registro === true, ...(anterior ? JSON.parse(anterior) : {}) }
+        if (args.titulo) ui.titulo = args.titulo
+        if (args.registro !== undefined) ui.registro = args.registro === true
+        if (tablasNorm) { ui.tablas = tablasNorm.map((x) => ({ nombre: x.nombre, sede: x.columnaAcceso || undefined })); ui.camposPerfil = sql.columnasPerfil }
+        if (args.valores) ui.valores = args.valores
+        await writeFile(archivoDatos, [
+          '// Conexión única de la app a la base de datos (generado por dsh-escritorio; se reescribe al usar escritorio_datos).',
+          "import { crearDatos } from './datos-en-vivo.js'",
+          "import { conectarUI } from './escritorio-ui.js'",
+          '',
+          '// Clave PÚBLICA: lo que cada usuario ve lo deciden los roles y permisos por fila en Supabase.',
+          `export const datos = crearDatos({ url: ${JSON.stringify(url)}, clave: ${JSON.stringify(clave)} })`,
+          `// UI: ${JSON.stringify(ui)}`,
+          `conectarUI(datos, ${JSON.stringify(ui, null, 2)})`,
+          '',
+        ].join('\n'))
         pasos.push(
           `✅ ${relLib}/datos.js (importa esto una vez, al inicio de la app), datos-en-vivo.js y escritorio-ui.js:`,
           '   - Envuelve TODA la interfaz en <acceso-escritorio>…</acceso-escritorio>: muestra el inicio de sesión hasta que haya sesión.',
           '   - Pon <estado-conexion></estado-conexion> y <usuario-escritorio></usuario-escritorio> en la barra superior.',
           "   - Lee y escribe con datos.enVivo('tabla', opciones, (filas) => …) y datos.guardar('tabla', fila); en React: useEffect(() => datos.enVivo('pagos', {}, setPagos), []).",
-          '   - datos.sesion.perfil() trae rol y sede; datos.sesion.esAdmin() para mostrar u ocultar opciones de administrador.',
+          '   - Permisos en la interfaz: datos.sesion.puede(tabla, "crear"|"cambiar"|"borrar") y datos.sesion.gestionaUsuarios() para mostrar u ocultar botones (la base de datos decide de verdad).',
+          '   - Pantalla de administración: agrega una sección "Usuarios" visible solo si datos.sesion.gestionaUsuarios() con <admin-usuarios></admin-usuarios> (crear usuarios, roles, permisos por tabla y por automatización, actividad de todos los equipos).',
         )
         if (args.instalar !== false) {
           const r = await correr(npm, ['install', '--no-audit', '--no-fund', `@supabase/supabase-js@${VERSIONES.supabase}`], { cwd: web, signal: exec.signal, timeoutMs: 8 * 60_000 })
@@ -677,22 +793,38 @@ export function apply(ctx, rawConfig) {
         await writeFile(archivoSql, sql.sql)
         const relSql = path.relative(cwd, archivoSql).split(path.sep).join('/')
         pasos.push(`✅ ${relSql}: ${sql.tablas.join(', ')} + perfiles (rol admin/usuario${sql.columnasPerfil.length ? `, ${sql.columnasPerfil.join(', ')}` : ''}), permisos por fila y tiempo real.`)
+        const archivoFuncion = path.join(cwd, 'supabase', 'functions', 'gestionar-usuarios', 'index.ts')
+        await mkdir(path.dirname(archivoFuncion), { recursive: true })
+        await cp(path.join(AQUI, 'web', 'funcion-usuarios.ts'), archivoFuncion)
+        const relFuncion = path.relative(cwd, archivoFuncion).split(path.sep).join('/')
+        pasos.push(`✅ ${relFuncion}: función del servidor que crea y administra usuarios (la clave secreta queda solo en Supabase). Roles: ${sql.roles.join(', ')}.`)
         const token = process.env.SUPABASE_ACCESS_TOKEN
         const ref = new URL(url).hostname.split('.')[0]
+        let aplicadoSql = false, aplicadaFuncion = false
         if (args.aplicar && token && /\.supabase\.co$/.test(new URL(url).hostname)) {
           try {
             const r = await fetch(`https://api.supabase.com/v1/projects/${ref}/database/query`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ query: sql.sql }), signal: exec.signal })
             const cuerpo = await r.text()
+            aplicadoSql = r.ok
             pasos.push(r.ok ? '✅ SQL aplicado en Supabase.' : `❌ Supabase rechazó el SQL (${r.status}): ${cuerpo.slice(0, 600)}`)
           } catch (e) { pasos.push(`❌ No pude aplicar el SQL: ${e.message}. Pégalo a mano en el SQL Editor.`) }
-        } else {
-          pasos.push(`Falta aplicarlo: ${args.aplicar ? 'no hay SUPABASE_ACCESS_TOKEN en este PC, así que ' : ''}abre Supabase → SQL Editor, pega ${relSql} y dale Run (se puede repetir sin problema).`)
+          try {
+            const form = new FormData()
+            form.append('metadata', JSON.stringify({ name: 'gestionar-usuarios', entrypoint_path: 'index.ts', verify_jwt: true }))
+            form.append('file', new Blob([await readFile(archivoFuncion)], { type: 'application/typescript' }), 'index.ts')
+            const r = await fetch(`https://api.supabase.com/v1/projects/${ref}/functions/deploy?slug=gestionar-usuarios`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form, signal: exec.signal })
+            aplicadaFuncion = r.ok
+            pasos.push(r.ok ? '✅ Función gestionar-usuarios publicada en Supabase.' : `❌ Supabase rechazó la función (${r.status}): ${(await r.text()).slice(0, 500)}`)
+          } catch (e) { pasos.push(`❌ No pude publicar la función: ${e.message}`) }
         }
+        if (!aplicadoSql) pasos.push(`Falta el SQL: ${args.aplicar && !token ? 'no hay SUPABASE_ACCESS_TOKEN en este PC, así que ' : ''}abre Supabase → SQL Editor, pega ${relSql} y dale Run (se puede repetir sin problema).`)
+        if (!aplicadaFuncion) pasos.push(`Falta la función: Supabase → Edge Functions → Deploy a new function → "Via Editor", nombre gestionar-usuarios, pega ${relFuncion} y Deploy (o con la CLI: supabase functions deploy gestionar-usuarios).`)
         pasos.push(
           'Después, díselo al usuario paso a paso:',
-          '1. Authentication → Users → Add user: crea un usuario por persona o equipo (correo y clave).',
-          `2. Corre las dos líneas comentadas al final del SQL para nombrar el administrador${sql.columnasPerfil.length ? ` y asignar ${sql.columnasPerfil.join(', ')} a cada usuario` : ''}.`,
-          ...(args.registro ? [] : ['3. Authentication → Sign In / Providers: desactiva "Allow new users to sign up" para que solo entren los usuarios creados.']),
+          '1. Authentication → Users → Add user: crea SOLO tu usuario (el del administrador).',
+          "2. En el SQL Editor: update public.perfiles set rol = 'admin' where correo = 'tu@correo.com';",
+          '3. Entra a la app con ese usuario: desde "Usuarios" creas a los demás, con su rol y sede, y ajustas permisos por rol y por automatización.',
+          ...(args.registro ? [] : ['4. Authentication → Sign In / Providers: desactiva "Allow new users to sign up" para que solo entren los usuarios creados.']),
         )
       } else {
         pasos.push('Sin "tablas": si las tablas ya existen, verifica que tengan Row Level Security con políticas y estén en la publicación supabase_realtime. Pasa "tablas" para que genere ese SQL.')
@@ -737,8 +869,8 @@ export function apply(ctx, rawConfig) {
 
   ctx.tools.register({
     name: 'escritorio_publicar',
-    description: 'Escribe el flujo de GitHub Actions que compila la app para Windows y Mac en los servidores de GitHub y publica los instaladores como versión (las apps instaladas se actualizan solas). No sube nada: devuelve los comandos para que el usuario apruebe el commit y la etiqueta.',
-    parameters: { type: 'object', properties: { carpeta: { type: 'string' } } },
+    description: 'Escribe el flujo de GitHub Actions que compila la app para Windows, Mac y Linux en los servidores de GitHub, publica los instaladores como versión (las apps instaladas se actualizan solas) y una página pública de descargas en GitHub Pages que siempre ofrece la última versión. No sube nada: devuelve los pasos para que el usuario apruebe el commit.',
+    parameters: { type: 'object', properties: { carpeta: { type: 'string' }, descripcion: { type: 'string', description: 'Frase para la página de descargas, ej. "El sistema de pagos de las sedes".' }, pagina: { type: 'boolean', description: 'false para no crear la página de descargas.' } } },
     output: salida,
     async execute(args, exec) {
       const cwd = await ctx.workingDirectory.ensure(exec.agent, exec.signal)
@@ -753,7 +885,16 @@ export function apply(ctx, rawConfig) {
       const webConDeps = webDirRel !== null && existsSync(path.join(raiz, webDirRel, 'package.json')) ? (webDirRel || '.') : null
       const flujo = path.join(raiz, '.github', 'workflows', 'escritorio.yml')
       await mkdir(path.dirname(flujo), { recursive: true })
-      await writeFile(flujo, flujoGithub({ dirRel, webDirRel: webConDeps, nombre: conf.nombre }))
+      let paginaRel = null, visibilidad = null
+      if (args?.pagina !== false && gh) {
+        const carpetaPagina = path.join(dir, 'descargas')
+        await mkdir(carpetaPagina, { recursive: true })
+        await writeFile(path.join(carpetaPagina, 'index.html'), paginaDescargas({ nombre: conf.nombre, owner: gh.owner, repo: gh.repo, color: conf.color || '#0a66ff', descripcion: args?.descripcion || '' }))
+        if (existsSync(path.join(dir, 'build', 'icon.png'))) await cp(path.join(dir, 'build', 'icon.png'), path.join(carpetaPagina, 'icono.png'))
+        paginaRel = path.relative(raiz, carpetaPagina).split(path.sep).join('/')
+        try { const r = await fetch(`https://api.github.com/repos/${gh.owner}/${gh.repo}`, { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'dsh-escritorio' } }); visibilidad = r.ok ? ((await r.json()).private ? 'privado' : 'público') : r.status === 404 ? 'privado' : null } catch {}
+      }
+      await writeFile(flujo, flujoGithub({ dirRel, webDirRel: webConDeps, nombre: conf.nombre, paginaRel }))
       if (gh) {
         const pkg = JSON.parse(await readFile(path.join(dir, 'package.json'), 'utf8'))
         pkg.build.publish = [{ provider: 'github', owner: gh.owner, repo: gh.repo, releaseType: 'release' }]
@@ -774,6 +915,12 @@ export function apply(ctx, rawConfig) {
         `Luego, en github.com/${gh ? `${gh.owner}/${gh.repo}` : '<usuario>/<repo>'}/actions se ve la compilación (unos 10 minutos) y los instaladores quedan en Releases. Para una prueba sin publicar: pestaña Actions → Escritorio → Run workflow.`,
         'Actualizaciones: Windows y Linux se actualizan solos (descargan en segundo plano e instalan al cerrar o con "Reiniciar y actualizar" en la bandeja). Mac sin certificado de Apple avisa y abre la descarga; con certificado (Developer ID) se pone "macFirmada": true y también se actualiza solo.',
         'Cada versión nueva necesita un número mayor: escritorio-v1.0.1, escritorio-v1.1.0…',
+        ...(paginaRel ? [
+          '',
+          `Página de descargas: ${paginaRel}/index.html → se publica en https://${gh.owner.toLowerCase()}.github.io/${gh.repo}/ con cada versión. Detecta Windows/Mac/Linux y siempre baja la última versión.`,
+          `Una sola vez, el usuario debe activar GitHub Pages: github.com/${gh.owner}/${gh.repo}/settings/pages → Source: "GitHub Actions".`,
+          ...(visibilidad === 'privado' ? ['⚠ El repositorio parece PRIVADO: la página y las descargas no serán públicas y las apps instaladas no podrán bajar actualizaciones. Usa un repositorio público para esta app (el código de la base de datos queda protegido por los permisos de Supabase, no por esconder el código).'] : []),
+        ] : []),
         'Si el repositorio es privado, las apps no podrán descargar actualizaciones sin un token: para uso interno conviene un repositorio aparte, público solo con los instaladores, o actualizar a mano.',
       ].join('\n')
     },

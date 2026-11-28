@@ -6,7 +6,7 @@ export function createClient() {
     from(t) {
       const filtros = []
       const q = {
-        select() { return q }, eq(k, v) { filtros.push([k, v]); return q }, order() { return q }, limit() { return q }, maybeSingle() { return Promise.resolve({ data: { id: 'u1', nombre: 'Laura', rol: 'usuario', sede: 'Norte' } }) },
+        select() { return q }, eq(k, v) { filtros.push([k, v]); return q }, order() { return q }, limit() { return q }, maybeSingle() { return Promise.resolve({ data: t === 'roles' ? { nombre: 'cajero', permisos: { pagos: { acciones: ['leer', 'crear'], alcance: 'sede' } }, automatizaciones: ['descargar-pagos'], gestiona_usuarios: false } : { id: 'u1', nombre: 'Laura', rol: 'cajero', sede: 'Norte' } }) },
         then(ok) { return Promise.resolve(estado.red ? { data: estado.filas[t].filter((f) => filtros.every(([k, v]) => f[k] === v)) } : { error: errRed }).then(ok) },
         upsert(fila) { return { select: () => (estado.red ? (estado.escrituras.push(['upsert', t, fila]), Promise.resolve({ data: [fila] })) : Promise.reject(new TypeError('Failed to fetch'))) } },
         delete() { return { eq: (k, v) => (estado.red ? (estado.escrituras.push(['delete', t, v]), Promise.resolve({})) : Promise.resolve({ error: errRed })) } },

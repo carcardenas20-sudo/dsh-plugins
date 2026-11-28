@@ -107,7 +107,7 @@ function pintar() {
       <div class="fila">
         <div><div class="nombre">${esc(a.nombre)}</div></div>
         <div class="acciones">
-          ${a.ejecutando ? `<button class="peligro" data-accion="cancelar">Detener</button>` : `<button class="primario" data-accion="ejecutar" ${a.error ? 'disabled' : ''}>Ejecutar</button>`}
+          ${a.ejecutando ? `<button class="peligro" data-accion="cancelar">Detener</button>` : `<button class="primario" data-accion="ejecutar" ${a.error || !a.permitida ? 'disabled' : ''}>Ejecutar</button>`}
           <button data-accion="pausar" ${a.error ? 'disabled' : ''}>${a.activa ? 'Pausar' : 'Activar'}</button>
         </div>
       </div>
@@ -121,6 +121,7 @@ function pintar() {
       </div>
       ${a.ejecutando ? `<div class="barra ${a.progreso ? '' : 'indef'}"><i style="width:${a.progreso?.porcentaje ?? 0}%"></i></div>${a.progreso?.texto ? `<div class="meta" style="margin-top:6px">${esc(a.progreso.texto)}</div>` : ''}` : ''}
       ${a.error ? `<div class="error-carga">${esc(a.error)}</div>` : ''}
+      ${a.bloqueo && !a.error ? `<div class="meta" style="margin-top:8px">🔒 ${esc(a.bloqueo)}</div>` : ''}
     </article>`).join('') : '<div class="vacio">Pídele a DeepSeek una automatización: "cada día a las 6 pm descarga el reporte de la plataforma y guárdalo en Documentos".</div>'
   if (elegida) pintarDetalle()
 }

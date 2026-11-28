@@ -51,7 +51,58 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
   let enCurso = 0
   const esperando = []
   let sesion = null
+  let infoUsuario = null // perfil del usuario con sesión: rol, sede…, automatizaciones permitidas
   let realtime = null
+  let clienteBase = null
+  const multiEquipo = !!(config.supabase?.url && config.supabase?.clave)
+  const equipo = String(config.equipo || os.hostname())
+  const base = () => {
+    if (!multiEquipo || !sesion?.access_token) return null
+    if (!clienteBase) {
+      const { createClient } = require('@supabase/supabase-js')
+      clienteBase = createClient(config.supabase.url, config.supabase.clave, { accessToken: async () => sesion?.access_token ?? null })
+    }
+    return clienteBase
+  }
+  // ---------- permisos por rol y equipo ----------
+  function permitida(a) {
+    if (!multiEquipo || !armarDisparadores) return { ok: true } // un solo equipo, o modo prueba
+    if (!infoUsuario) return { ok: false, motivo: 'Esperando que alguien inicie sesión en la app' }
+    if (infoUsuario.rol === 'admin' || (infoUsuario.automatizaciones || []).some((x) => x === '*' || x === a.id)) return { ok: true }
+    return { ok: false, motivo: `El rol "${infoUsuario.rol}" no tiene permiso para esta automatización` }
+  }
+  // correEn: { rol: 'admin' } · { sede: ['Norte'] } · { equipo: 'CAJA-1' }: los horarios y vigilantes solo se activan en esos equipos
+  function correAqui(a) {
+    const c = a.meta.correEn
+    if (!c || typeof c !== 'object') return { ok: true }
+    for (const [k, v] of Object.entries(c)) {
+      const valores = (Array.isArray(v) ? v : [v]).map((x) => String(x).toLowerCase())
+      const actual = k === 'equipo' ? equipo : infoUsuario?.[k]
+      if (actual === undefined || actual === null || !valores.includes(String(actual).toLowerCase())) return { ok: false, motivo: `Corre solo donde ${k} sea ${valores.join(' o ')} (aquí: ${actual ?? 'sin dato'})` }
+    }
+    return { ok: true }
+  }
+  // Con varios equipos, una tarea programada o un cambio de tabla corre en uno solo: el primero que toma el turno.
+  async function tomarTurno(a, disparo) {
+    if (!multiEquipo || a.meta.unaVez === false || !['cron', 'cada', 'tabla'].includes(disparo.tipo)) return true
+    const db = base()
+    if (!db) return true
+    const ms = (() => { try { return duracion(a.disparadores.find((d) => d.cada)?.cada) } catch { return 0 } })()
+    const marca = disparo.tipo === 'cron' ? disparo.programada : disparo.tipo === 'cada' ? new Date(Math.floor(Date.now() / (ms || 60e3)) * (ms || 60e3)).toISOString() : `${disparo.tabla}:${disparo.evento}:${disparo.fila?.id ?? disparo.anterior?.id ?? ''}:${disparo.confirmado ?? ''}`
+    const { error } = await db.from('automatizacion_turnos').insert({ clave: `${a.id}@${marca}`, equipo })
+    if (!error) return true
+    if (error.code === '23505' || /duplicate key/i.test(error.message)) { registrar(`[${a.id}] otro equipo tomó el turno (${marca})`); return false }
+    registrar(`[${a.id}] no se pudo tomar turno (${error.message}); corre aquí por si acaso`)
+    return true
+  }
+  async function anotarEnBase(entrada) {
+    const db = base()
+    if (!db) return
+    let resultado = entrada.resultado
+    try { if (JSON.stringify(resultado).length > 4000) resultado = { resumen: JSON.stringify(resultado).slice(0, 4000) } } catch { resultado = null }
+    const { error } = await db.from('automatizacion_corridas').insert({ automatizacion: entrada.id, nombre: entrada.nombre, equipo, inicio: entrada.inicio, fin: entrada.fin, ok: entrada.ok, disparo: entrada.disparo?.tipo, error: entrada.error, resultado: typeof resultado === 'string' ? { texto: resultado } : resultado })
+    if (error) registrar(`[${entrada.id}] no se pudo anotar la corrida en la base: ${error.message}`)
+  }
   let detenido = false
 
   const rutaDe = (p) => { p = String(p); if (p === '~' || /^~[\\/]/.test(p)) p = path.join(os.homedir(), p.slice(1)); return path.resolve(p) }
@@ -85,14 +136,16 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
     return 'A mano'
   }
   function resumen(a) {
+    const perm = permitida(a), aqui = correAqui(a)
     return {
+      permitida: perm.ok, correAqui: aqui.ok, bloqueo: !perm.ok ? perm.motivo : !aqui.ok ? aqui.motivo : null,
       id: a.id, nombre: a.meta.nombre || a.id, descripcion: a.meta.descripcion || '', error: a.error || null,
       cuando: a.disparadores.map(textoCuando), activa: a.activa, ejecutando: !!a.proceso, enCola: a.cola.length,
       progreso: a.progreso || null, enPrueba: a.meta.enPrueba, proxima: a.proxima ? a.proxima.toISOString() : null, ultima: a.ultima || null,
       tiposDisparo: a.disparadores.map((d) => d.cron ? 'cron' : d.cada ? 'cada' : d.carpeta ? 'carpeta' : d.tabla ? 'tabla' : d.alIniciar ? 'alIniciar' : 'manual'),
     }
   }
-  const lista = () => [...autos.values()].map(resumen)
+  const lista = () => [...autos.values()].map(resumen).filter((r) => r.permitida || !infoUsuario) // sin permiso no se muestran
   let pendienteAviso = null
   const cambio = () => { if (pendienteAviso) return; pendienteAviso = setTimeout(() => { pendienteAviso = null; avisar(lista()) }, 120) }
 
@@ -100,6 +153,11 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
   function encolar(id, disparo) {
     const a = autos.get(id)
     if (!a || a.error) return false
+    if (!permitida(a).ok) { registrar(`[${id}] no corre: ${permitida(a).motivo}`); return false }
+    if (['cron', 'cada', 'tabla'].includes(disparo.tipo) && multiEquipo && a.meta.unaVez !== false && !disparo.turno) {
+      tomarTurno(a, disparo).then((ok) => { if (ok) encolar(id, { ...disparo, turno: true }) })
+      return true
+    }
     if (a.cola.length >= 100) { registrar(`[${id}] cola llena, se descarta un disparo`); return false }
     a.cola.push({ disparo: { hora: new Date().toISOString(), ...disparo }, intento: 0 })
     bombear(); cambio()
@@ -132,6 +190,7 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
       a.proceso = null; a.progreso = null
       const entrada = { id: a.id, nombre: a.meta.nombre || a.id, inicio: inicio.toISOString(), fin: new Date().toISOString(), ms: Date.now() - inicio.getTime(), ok: !!r.ok, disparo: trabajo.disparo, intento: trabajo.intento + 1, resultado: r.resultado ?? null, error: r.error || null, pila: r.pila || null, capturas: r.capturas || [], registros }
       anotar(entrada)
+      anotarEnBase(entrada).catch(() => {})
       a.ultima = { ok: entrada.ok, fin: entrada.fin, ms: entrada.ms, error: entrada.error, resultado: entrada.resultado }
       registrar(`[${a.id}] ${entrada.ok ? 'ok' : 'falló'} en ${entrada.ms} ms${entrada.error ? `: ${entrada.error}` : ''}`)
       if (!entrada.ok) {
@@ -247,7 +306,7 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
       }
       const filtro = { event: (d.evento || '*').toUpperCase(), schema: d.esquema || 'public', table: d.tabla, ...(d.filtro ? { filter: d.filtro } : {}) }
       const canal = realtime.channel(`auto-${a.id}-${d.tabla}`)
-        .on('postgres_changes', filtro, (c) => { if (a.activa) encolar(a.id, { tipo: 'tabla', tabla: d.tabla, evento: c.eventType, fila: c.new, anterior: c.old }) })
+        .on('postgres_changes', filtro, (c) => { if (a.activa) encolar(a.id, { tipo: 'tabla', tabla: d.tabla, evento: c.eventType, fila: c.new, anterior: c.old, confirmado: c.commit_timestamp }) })
         .subscribe((estado, err) => { a.conexion = estado; if (estado === 'CHANNEL_ERROR' || estado === 'TIMED_OUT') registrar(`[${a.id}] tiempo real: ${estado} ${err?.message || ''}`); cambio() })
       a.canales.add(canal)
     } catch (e) { a.error = `Tiempo real: ${e.message}` }
@@ -255,7 +314,7 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
 
   function armar(a) {
     desarmar(a)
-    if (!a.activa || a.error) return
+    if (!a.activa || a.error || !permitida(a).ok || !correAqui(a).ok) return
     for (const d of a.disparadores) {
       if (d.cron) programarCron(a, d)
       else if (d.cada) programarCada(a, d)
@@ -306,7 +365,12 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
 
   return {
     cargar, lista, historial,
-    ejecutar: (id, datos) => { if (!autos.has(id)) throw new Error(`No existe la automatización "${id}"`); return encolar(id, { tipo: 'manual', datos: datos ?? null }) },
+    ejecutar: (id, datos) => {
+      const a = autos.get(id)
+      if (!a) throw new Error(`No existe la automatización "${id}"`)
+      const p = permitida(a); if (!p.ok) throw new Error(p.motivo)
+      return encolar(id, { tipo: 'manual', datos: datos ?? null })
+    },
     activar(id, activa) {
       const a = autos.get(id); if (!a) throw new Error(`No existe "${id}"`)
       a.activa = !!activa
@@ -314,7 +378,17 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
       armar(a); cambio()
     },
     cancelar(id) { const a = autos.get(id); if (a?.proceso) { a.cola = []; try { a.proceso.postMessage({ tipo: 'cancelar' }) } catch {} ; setTimeout(() => { try { a.proceso?.kill() } catch {} }, 1500) } },
-    fijarSesion(s) { sesion = s && s.access_token ? { access_token: s.access_token, refresh_token: s.refresh_token } : null; try { realtime?.realtime.setAuth(sesion?.access_token || config.supabase?.clave) } catch {} },
+    fijarSesion(s, info) {
+      const antes = JSON.stringify([infoUsuario?.id, infoUsuario?.rol, infoUsuario?.automatizaciones, infoUsuario && Object.entries(infoUsuario).filter(([k]) => !['automatizaciones'].includes(k))])
+      sesion = s && s.access_token ? { access_token: s.access_token, refresh_token: s.refresh_token } : null
+      infoUsuario = sesion && info && typeof info === 'object' ? { ...info } : null
+      try { realtime?.realtime.setAuth(sesion?.access_token || config.supabase?.clave) } catch {}
+      const despues = JSON.stringify([infoUsuario?.id, infoUsuario?.rol, infoUsuario?.automatizaciones, infoUsuario && Object.entries(infoUsuario).filter(([k]) => !['automatizaciones'].includes(k))])
+      // cambió quién está o su rol: se rearman horarios y vigilantes según los permisos nuevos
+      if (antes !== despues && armarDisparadores) { for (const a of autos.values()) armar(a); registrar(`sesión: ${infoUsuario ? `${infoUsuario.correo || infoUsuario.id} (${infoUsuario.rol})` : 'sin sesión'}`) }
+      cambio()
+    },
+    equipo,
     esperarTodas: () => new Promise((r) => { const v = () => ([...autos.values()].some((a) => a.proceso || a.cola.length) ? setTimeout(v, 300) : r()); v() }),
     detener() { detenido = true; for (const a of autos.values()) { desarmar(a); try { a.proceso?.kill() } catch {} } },
   }

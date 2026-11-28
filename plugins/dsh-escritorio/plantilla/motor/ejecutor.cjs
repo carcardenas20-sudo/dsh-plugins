@@ -199,7 +199,7 @@ async function describir(archivos) {
       const a = mod.default && !mod.ejecutar ? mod.default : mod
       if (typeof a.ejecutar !== 'function') throw new Error('no exporta ejecutar(ctx)')
       const limpio = (v) => JSON.parse(JSON.stringify(v ?? null))
-      lista.push({ archivo, nombre: a.nombre, descripcion: a.descripcion, cuando: limpio(a.cuando), tiempoMaximo: a.tiempoMaximo, reintentos: a.reintentos, avisarError: a.avisarError, avisarExito: a.avisarExito, activa: a.activa, ponerseAlDia: a.ponerseAlDia, enPrueba: a.enPrueba })
+      lista.push({ archivo, nombre: a.nombre, descripcion: a.descripcion, cuando: limpio(a.cuando), tiempoMaximo: a.tiempoMaximo, reintentos: a.reintentos, avisarError: a.avisarError, avisarExito: a.avisarExito, activa: a.activa, ponerseAlDia: a.ponerseAlDia, enPrueba: a.enPrueba, correEn: limpio(a.correEn), unaVez: a.unaVez })
     } catch (e) { lista.push({ archivo, error: String(e?.message || e).split('\n')[0] }) }
   }
   enviar({ tipo: 'descripcion', lista })

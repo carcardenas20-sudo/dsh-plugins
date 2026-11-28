@@ -28,10 +28,11 @@ export function crearDatos({ url, clave, opciones = {} }) {
   const prefijo = `datos:${new URL(url).host}:`
   const oyentesCola = new Set()
 
-  // En la app de escritorio, las automatizaciones actúan con la sesión del usuario que inició sesión aquí.
-  if (disponible && window.escritorio?.automatizaciones) {
-    cliente.auth.getSession().then(({ data }) => window.escritorio.automatizaciones.sesion(data.session))
-    cliente.auth.onAuthStateChange((_evento, sesion) => window.escritorio.automatizaciones.sesion(sesion))
+  // En la app de escritorio, las automatizaciones actúan con la sesión y el rol del usuario que inició sesión aquí.
+  let sesionActual = null
+  const avisarEscritorio = () => {
+    if (!disponible || !window.escritorio?.automatizaciones) return
+    window.escritorio.automatizaciones.sesion(sesionActual, perfil ? { ...perfil, permisos: undefined, automatizaciones: rolActual?.automatizaciones || [], gestionaUsuarios: !!rolActual?.gestiona_usuarios } : null)
   }
 
   /**
@@ -87,14 +88,17 @@ export function crearDatos({ url, clave, opciones = {} }) {
   }
 
   // ---------- sesión ----------
-  let usuario = null, perfil = null
+  let usuario = null, perfil = null, rolActual = null
   const oyentesSesion = new Set()
   const avisarSesion = () => oyentesSesion.forEach((fn) => fn(usuario, perfil))
   async function cargarPerfil() {
-    if (!usuario) { perfil = null; return }
+    if (!usuario) { perfil = null; rolActual = null; avisarEscritorio(); return }
     const { data } = await cliente.from('perfiles').select('*').eq('id', usuario.id).maybeSingle()
     perfil = data || null
-    if (perfil) almacen.guardar(`${prefijo}perfil`, perfil)
+    rolActual = null
+    if (perfil?.rol) rolActual = (await cliente.from('roles').select('*').eq('nombre', perfil.rol).maybeSingle()).data || null
+    if (perfil) almacen.guardar(`${prefijo}perfil`, { ...perfil, _rol: rolActual })
+    avisarEscritorio()
   }
   const errorEnEspanol = (e) => {
     const m = String(e?.message || e)
@@ -106,12 +110,16 @@ export function crearDatos({ url, clave, opciones = {} }) {
   }
   cliente.auth.getSession().then(async ({ data }) => {
     usuario = data.session?.user || null
-    perfil = usuario ? almacen.leer(`${prefijo}perfil`, null) : null
+    sesionActual = data.session || null
+    const guardado = usuario ? almacen.leer(`${prefijo}perfil`, null) : null
+    if (guardado && guardado.id === usuario?.id) { const { _rol, ...p } = guardado; perfil = p; rolActual = _rol || null }
     avisarSesion(); await cargarPerfil().catch(() => {}); avisarSesion()
   })
   cliente.auth.onAuthStateChange((evento, s) => {
     const antes = usuario?.id
     usuario = s?.user || null
+    sesionActual = s || null
+    if (evento === 'TOKEN_REFRESHED') avisarEscritorio()
     if (usuario?.id !== antes || evento === 'USER_UPDATED') setTimeout(async () => { await cargarPerfil().catch(() => {}); avisarSesion() }, 0)
     else avisarSesion()
   })
@@ -124,7 +132,51 @@ export function crearDatos({ url, clave, opciones = {} }) {
     usuario: () => usuario,
     perfil: () => perfil,
     esAdmin: () => perfil?.rol === 'admin',
+    rol: () => rolActual,
+    /** ¿El rol puede hacer esta acción en la tabla? (para mostrar u ocultar botones; la base de datos decide de verdad) */
+    puede: (tabla, accion) => perfil?.rol === 'admin' || !!rolActual?.permisos?.[tabla]?.acciones?.includes(accion),
+    alcance: (tabla) => (perfil?.rol === 'admin' ? 'todo' : rolActual?.permisos?.[tabla]?.alcance || 'todo'),
+    gestionaUsuarios: () => perfil?.rol === 'admin' || !!rolActual?.gestiona_usuarios,
+    puedeAutomatizacion: (id) => perfil?.rol === 'admin' || (rolActual?.automatizaciones || []).some((x) => x === '*' || x === id),
+    recargar: async () => { await cargarPerfil().catch(() => {}); avisarSesion() },
     alCambiar: (fn) => { oyentesSesion.add(fn); fn(usuario, perfil); return () => oyentesSesion.delete(fn) },
+  }
+
+  // ---------- administración: usuarios (función del servidor) y roles ----------
+  async function funcion(accion, datos = {}) {
+    const { data, error } = await cliente.functions.invoke('gestionar-usuarios', { body: { accion, ...datos } })
+    if (!error) return { ok: true, ...data }
+    let mensaje = error.message
+    try { const cuerpo = await error.context?.json?.(); if (cuerpo?.error) mensaje = cuerpo.error } catch {}
+    if (/Failed to send|fetch/i.test(mensaje)) mensaje = 'No se pudo llegar a la función "gestionar-usuarios": revisa la conexión o que esté publicada en Supabase.'
+    return { ok: false, error: mensaje }
+  }
+  const admin = {
+    usuarios: {
+      listar: () => funcion('listar'),
+      /** { correo, clave, nombre, rol, campos: { sede: 'Norte' } } */
+      crear: (u) => funcion('crear', u),
+      /** (id, { nombre, rol, activo, campos }) */
+      actualizar: (id, cambios) => funcion('actualizar', { id, ...cambios }),
+      cambiarClave: (id, clave) => funcion('clave', { id, clave }),
+      borrar: (id) => funcion('borrar', { id }),
+    },
+    roles: {
+      async listar() { const { data, error } = await cliente.from('roles').select('*').order('nombre'); return error ? { ok: false, error: error.message } : { ok: true, roles: data } },
+      /** { nombre, descripcion, permisos: { tabla: { acciones, alcance } }, automatizaciones: [], gestiona_usuarios } */
+      async guardar(rol) {
+        const { error } = await cliente.from('roles').upsert({ nombre: rol.nombre, descripcion: rol.descripcion ?? null, permisos: rol.permisos || {}, automatizaciones: rol.automatizaciones || [], gestiona_usuarios: !!rol.gestiona_usuarios })
+        if (!error && rol.nombre === perfil?.rol) await cargarPerfil().catch(() => {})
+        return error ? { ok: false, error: /row-level|permission/i.test(error.message) ? 'Solo un administrador puede cambiar roles.' : error.message } : { ok: true }
+      },
+      async borrar(nombre) {
+        if (nombre === 'admin') return { ok: false, error: 'El rol admin no se puede borrar.' }
+        const { error } = await cliente.from('roles').delete().eq('nombre', nombre)
+        return error ? { ok: false, error: /foreign key|violates/i.test(error.message) ? 'Hay usuarios con ese rol: cámbiales el rol primero.' : error.message } : { ok: true }
+      },
+    },
+    /** Corridas de automatizaciones de todos los equipos (quien gestiona usuarios las ve todas). */
+    async corridas(limite = 50) { const { data, error } = await cliente.from('automatizacion_corridas').select('*').order('fin', { ascending: false }).limit(limite); return error ? { ok: false, error: error.message } : { ok: true, corridas: data } },
   }
 
   // ---------- conexión ----------
@@ -186,6 +238,7 @@ export function crearDatos({ url, clave, opciones = {} }) {
     alCambiarPendientes: (fn) => { oyentesCola.add(fn); fn(leerCola().length); return () => oyentesCola.delete(fn) },
     sincronizar: vaciarCola,
     sesion,
+    admin,
     conexion,
     alCambiarConexion: (fn) => { oyentesConexion.add(fn); fn(conexion()); return () => oyentesConexion.delete(fn) },
   }

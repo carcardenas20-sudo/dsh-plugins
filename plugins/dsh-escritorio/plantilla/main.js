@@ -275,7 +275,7 @@ ipcMain.handle('auto:ejecutar', (ev, id, datos) => { exigir(ev); return motor.ej
 ipcMain.handle('auto:activar', (ev, id, activa) => { exigir(ev); motor.activar(String(id), !!activa); return true })
 ipcMain.handle('auto:cancelar', (ev, id) => { exigir(ev); motor.cancelar(String(id)); return true })
 ipcMain.handle('auto:historial', (ev, id, n) => { exigir(ev); return motor.historial(id ? String(id) : null, Math.min(Number(n) || 50, 500)) })
-ipcMain.handle('auto:sesion', (ev, s) => { exigir(ev); motor.fijarSesion(s); return true })
+ipcMain.handle('auto:sesion', (ev, s, info) => { if (!permitidoIpc(ev)) throw new Error('no permitido'); if (!motor) return false; motor.fijarSesion(s, info); return true })
 ipcMain.handle('auto:panel', (ev, id) => { if (!permitidoIpc(ev)) throw new Error('no permitido'); abrirPanel(id); return true })
 ipcMain.handle('auto:abrir-archivo', (ev, f) => {
   if (!permitidoIpc(ev)) throw new Error('no permitido')

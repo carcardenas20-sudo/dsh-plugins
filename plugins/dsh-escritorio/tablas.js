@@ -1,5 +1,10 @@
-// Genera el SQL de Supabase para las tablas de una app: columnas, permisos por fila (RLS), perfiles con rol
-// y sede, fecha de actualización automática y tiempo real. Todo es repetible: correrlo dos veces no rompe nada.
+// Genera el SQL de Supabase para una app de varios equipos: tablas, usuarios con roles y permisos por fila,
+// permisos de automatizaciones y registro de corridas. Todo es repetible: correrlo dos veces no rompe nada.
+//
+// Los permisos viven como datos (tabla "roles"), así el administrador los cambia desde la app sin tocar SQL:
+//   roles.permisos = { "<tabla>": { "acciones": ["leer","crear","cambiar","borrar"], "alcance": "todo" | "sede" | "propio" } }
+//   roles.automatizaciones = ['descargar-pagos', …] o ['*'] · roles.gestiona_usuarios = true/false
+// "sede" significa: la columna de acceso de la tabla (sede, área…) igual a la del perfil del usuario.
 
 const TIPOS = {
   texto: 'text', numero: 'numeric', entero: 'integer', dinero: 'numeric(14,2)', fecha: 'date', fechahora: 'timestamptz',
@@ -7,27 +12,27 @@ const TIPOS = {
 }
 const RESERVADAS = new Set(['user', 'order', 'group', 'table', 'select', 'from', 'where', 'limit', 'offset', 'default', 'check', 'primary', 'references', 'all', 'and', 'or', 'not', 'null', 'true', 'false', 'end', 'case', 'when', 'to', 'grant', 'column'])
 const AUTOMATICAS = new Set(['id', 'creado_por', 'creado', 'actualizado'])
+const PROPIAS = new Set(['perfiles', 'roles', 'automatizacion_turnos', 'automatizacion_corridas'])
 export const ACCESOS = ['autenticados', 'propietario', 'por-columna', 'solo-lectura']
+export const ACCIONES = ['leer', 'crear', 'cambiar', 'borrar']
+export const ALCANCES = ['todo', 'sede', 'propio']
 
-const nombreSql = (s, que) => {
+export const nombreSql = (s, que) => {
   const n = String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/ñ/g, 'n').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
   if (!/^[a-z][a-z0-9_]{0,50}$/.test(n)) throw new Error(`${que} "${s}" no es un nombre válido (letras, números y _)`)
   if (RESERVADAS.has(n)) throw new Error(`${que} "${n}" es una palabra reservada de SQL; usa otro nombre`)
   return n
 }
 const literal = (v) => (v === null ? 'null' : typeof v === 'number' ? String(v) : typeof v === 'boolean' ? String(v) : `'${String(v).replace(/'/g, "''")}'`)
+const jsonSql = (v) => `${literal(JSON.stringify(v))}::jsonb`
+const arregloSql = (a) => `array[${a.map(literal).join(', ')}]::text[]`
 
-/**
- * tablas: [{ nombre, columnas: [{ nombre, tipo, requerido, unico, defecto, referencia, opciones }], acceso, columnaAcceso }]
- * acceso: autenticados (cualquiera con sesión) · propietario (cada quien lo suyo; admin todo) ·
- *         por-columna (filas de su sede/área según su perfil; admin todo) · solo-lectura (todos leen, admin escribe)
- */
 export function normalizarTablas(tablas) {
   if (!Array.isArray(tablas) || !tablas.length) throw new Error('"tablas" debe ser una lista con al menos una tabla')
   const nombres = new Set()
   const salida = tablas.map((t) => {
     const nombre = nombreSql(t.nombre, 'La tabla')
-    if (nombre === 'perfiles') throw new Error('"perfiles" la crea el plugin (usuarios, rol y sede); usa otro nombre')
+    if (PROPIAS.has(nombre)) throw new Error(`"${nombre}" la crea el plugin; usa otro nombre`)
     if (nombres.has(nombre)) throw new Error(`tabla repetida: ${nombre}`)
     nombres.add(nombre)
     const acceso = t.acceso || 'autenticados'
@@ -44,9 +49,9 @@ export function normalizarTablas(tablas) {
     })
     if (!columnas.length) throw new Error(`${nombre}: no tiene columnas`)
     let columnaAcceso = null
-    if (acceso === 'por-columna') {
+    if (t.columnaAcceso || acceso === 'por-columna') {
       columnaAcceso = nombreSql(t.columnaAcceso || 'sede', `La columna de acceso de ${nombre}`)
-      if (!cols.has(columnaAcceso)) throw new Error(`${nombre}: acceso por-columna usa "${columnaAcceso}", que no está entre sus columnas`)
+      if (!cols.has(columnaAcceso)) throw new Error(`${nombre}: la columna de acceso "${columnaAcceso}" no está entre sus columnas`)
     }
     return { nombre, acceso, columnaAcceso, columnas }
   })
@@ -54,10 +59,46 @@ export function normalizarTablas(tablas) {
   return salida
 }
 
-export function sqlDeTablas(tablasEntrada) {
+/** Permisos del rol "usuario" deducidos del "acceso" de cada tabla (cuando no se definen roles). */
+function permisosPorAcceso(tablas) {
+  const p = {}
+  for (const t of tablas) {
+    p[t.nombre] = t.acceso === 'solo-lectura' ? { acciones: ['leer'], alcance: 'todo' }
+      : { acciones: [...ACCIONES], alcance: t.acceso === 'propietario' ? 'propio' : t.acceso === 'por-columna' ? 'sede' : 'todo' }
+  }
+  return p
+}
+
+export function normalizarRoles(roles, tablas) {
+  const nombresTablas = new Set(tablas.map((t) => t.nombre))
+  const lista = Array.isArray(roles) && roles.length ? roles : [{ nombre: 'usuario', descripcion: 'Usuario normal', permisos: permisosPorAcceso(tablas), automatizaciones: ['*'] }]
+  const vistos = new Set(['admin'])
+  const salida = [{ nombre: 'admin', descripcion: 'Administrador: todo, incluidos usuarios y roles', permisos: {}, automatizaciones: ['*'], gestionaUsuarios: true }]
+  for (const r of lista) {
+    const nombre = nombreSql(r.nombre, 'El rol')
+    if (nombre === 'admin') continue // siempre existe y lo puede todo
+    if (vistos.has(nombre)) throw new Error(`rol repetido: ${nombre}`)
+    vistos.add(nombre)
+    const permisos = {}
+    for (const [tabla, p] of Object.entries(r.permisos || {})) {
+      const nt = nombreSql(tabla, `La tabla en los permisos de ${nombre}`)
+      if (!nombresTablas.has(nt)) throw new Error(`rol ${nombre}: la tabla "${nt}" no está en la lista de tablas`)
+      const acciones = (Array.isArray(p) ? p : p.acciones || []).map(String)
+      for (const a of acciones) if (!ACCIONES.includes(a)) throw new Error(`rol ${nombre}, ${nt}: acción "${a}" no existe (usa ${ACCIONES.join(', ')})`)
+      const alcance = (Array.isArray(p) ? 'todo' : p.alcance) || 'todo'
+      if (!ALCANCES.includes(alcance)) throw new Error(`rol ${nombre}, ${nt}: alcance "${alcance}" no existe (usa ${ALCANCES.join(', ')})`)
+      if (alcance === 'sede' && !tablas.find((t) => t.nombre === nt).columnaAcceso) throw new Error(`rol ${nombre}, ${nt}: alcance "sede" necesita que la tabla tenga columnaAcceso`)
+      permisos[nt] = { acciones: [...new Set(acciones)], alcance }
+    }
+    salida.push({ nombre, descripcion: r.descripcion || '', permisos, automatizaciones: (r.automatizaciones || []).map(String), gestionaUsuarios: !!r.gestionaUsuarios })
+  }
+  return salida
+}
+
+export function sqlDeTablas(tablasEntrada, { roles: rolesEntrada } = {}) {
   const tablas = normalizarTablas(tablasEntrada)
+  const roles = normalizarRoles(rolesEntrada, tablas)
   const columnasPerfil = [...new Set(tablas.filter((t) => t.columnaAcceso).map((t) => t.columnaAcceso))]
-  // las tablas referenciadas primero
   const orden = []
   const visitar = (t, camino = new Set()) => {
     if (orden.includes(t)) return
@@ -68,34 +109,93 @@ export function sqlDeTablas(tablasEntrada) {
     orden.push(t)
   }
   tablas.forEach((t) => visitar(t))
+  const definer = 'language sql stable security definer set search_path = public'
 
   const L = []
   L.push('-- Generado por dsh-escritorio. Pégalo en Supabase → SQL Editor → Run (se puede correr varias veces).', '')
-  L.push('-- ============ Perfiles: rol (admin/usuario) y datos de acceso de cada usuario ============')
-  L.push(`create table if not exists public.perfiles (`,
-    `  id uuid primary key references auth.users(id) on delete cascade,`,
-    `  nombre text,`,
-    `  rol text not null default 'usuario' check (rol in ('admin', 'usuario')),`,
-    `  creado timestamptz not null default now()`,
-    `);`)
+  L.push('-- ============ Roles: qué puede hacer cada rol (editable desde la app por el administrador) ============',
+    'create table if not exists public.roles (',
+    '  nombre text primary key,',
+    '  descripcion text,',
+    "  permisos jsonb not null default '{}'::jsonb,",
+    "  automatizaciones text[] not null default '{}'::text[],",
+    '  gestiona_usuarios boolean not null default false,',
+    '  creado timestamptz not null default now()',
+    ');')
+  for (const r of roles) {
+    // los roles nuevos se crean; los que ya existen conservan lo que el admin cambió en la app
+    L.push(`insert into public.roles (nombre, descripcion, permisos, automatizaciones, gestiona_usuarios) values (${literal(r.nombre)}, ${literal(r.descripcion)}, ${jsonSql(r.permisos)}, ${arregloSql(r.automatizaciones)}, ${r.gestionaUsuarios}) on conflict (nombre) do nothing;`)
+  }
+  L.push("update public.roles set gestiona_usuarios = true, automatizaciones = '{*}' where nombre = 'admin';", '')
+
+  L.push('-- ============ Perfiles: rol, equipo/sede y estado de cada usuario ============',
+    'create table if not exists public.perfiles (',
+    '  id uuid primary key references auth.users(id) on delete cascade,',
+    '  nombre text,',
+    "  rol text not null default 'usuario',",
+    '  creado timestamptz not null default now()',
+    ');',
+    'alter table public.perfiles add column if not exists correo text;',
+    'alter table public.perfiles add column if not exists activo boolean not null default true;',
+    'alter table public.perfiles drop constraint if exists perfiles_rol_check;')
   for (const c of columnasPerfil) L.push(`alter table public.perfiles add column if not exists ${c} text;`)
-  L.push('alter table public.perfiles enable row level security;',
-    `create or replace function public.es_admin() returns boolean language sql stable security definer set search_path = public as $$ select exists (select 1 from public.perfiles where id = auth.uid() and rol = 'admin') $$;`)
-  for (const c of columnasPerfil) L.push(`create or replace function public.mi_${c}() returns text language sql stable security definer set search_path = public as $$ select ${c} from public.perfiles where id = auth.uid() $$;`)
-  L.push(`drop policy if exists "perfil propio o admin" on public.perfiles;`,
-    `create policy "perfil propio o admin" on public.perfiles for select to authenticated using (id = auth.uid() or public.es_admin());`,
-    `drop policy if exists "admin gestiona perfiles" on public.perfiles;`,
-    `create policy "admin gestiona perfiles" on public.perfiles for all to authenticated using (public.es_admin()) with check (public.es_admin());`,
-    `-- cada usuario nuevo recibe su perfil (el admin luego le asigna rol${columnasPerfil.length ? ` y ${columnasPerfil.join(', ')}` : ''})`,
-    `create or replace function public.crear_perfil() returns trigger language plpgsql security definer set search_path = public as $$ begin insert into public.perfiles (id, nombre) values (new.id, coalesce(new.raw_user_meta_data->>'nombre', split_part(new.email, '@', 1))) on conflict (id) do nothing; return new; end $$;`,
-    `drop trigger if exists crear_perfil on auth.users;`,
-    `create trigger crear_perfil after insert on auth.users for each row execute function public.crear_perfil();`,
-    `insert into public.perfiles (id, nombre) select id, split_part(email, '@', 1) from auth.users on conflict (id) do nothing;`,
-    `create or replace function public.marcar_actualizado() returns trigger language plpgsql as $$ begin new.actualizado = now(); return new; end $$;`, '')
+  const rolPorDefecto = roles.find((r) => r.nombre === 'usuario') ? 'usuario' : roles[1]?.nombre || 'admin'
+  L.push(`alter table public.perfiles alter column rol set default ${literal(rolPorDefecto)};`,
+    `update public.perfiles set rol = ${literal(rolPorDefecto)} where rol not in (select nombre from public.roles);`,
+    'alter table public.perfiles drop constraint if exists perfiles_rol_fkey;',
+    'alter table public.perfiles add constraint perfiles_rol_fkey foreign key (rol) references public.roles(nombre) on update cascade;',
+    'alter table public.perfiles enable row level security;',
+    'alter table public.roles enable row level security;',
+    '',
+    '-- ============ Funciones de permisos (las usan las políticas y la app) ============',
+    `create or replace function public.mi_rol() returns text ${definer} as $$ select rol from public.perfiles where id = auth.uid() and activo $$;`,
+    `create or replace function public.es_admin() returns boolean ${definer} as $$ select coalesce(public.mi_rol() = 'admin', false) $$;`,
+    `create or replace function public.gestiona_usuarios() returns boolean ${definer} as $$ select coalesce((select gestiona_usuarios from public.roles where nombre = public.mi_rol()), false) $$;`,
+    `create or replace function public.permiso(tabla text) returns jsonb ${definer} as $$ select case when public.es_admin() then '{"acciones":["leer","crear","cambiar","borrar"],"alcance":"todo"}'::jsonb else (select permisos -> tabla from public.roles where nombre = public.mi_rol()) end $$;`,
+    `create or replace function public.puede(tabla text, accion text) returns boolean ${definer} as $$ select coalesce(public.permiso(tabla) -> 'acciones' ? accion, false) $$;`,
+    `create or replace function public.alcance(tabla text) returns text ${definer} as $$ select coalesce(public.permiso(tabla) ->> 'alcance', 'todo') $$;`,
+    `create or replace function public.puede_automatizacion(id text) returns boolean ${definer} as $$ select public.es_admin() or coalesce((select '*' = any(automatizaciones) or id = any(automatizaciones) from public.roles where nombre = public.mi_rol()), false) $$;`)
+  for (const c of columnasPerfil) L.push(`create or replace function public.mi_${c}() returns text ${definer} as $$ select ${c} from public.perfiles where id = auth.uid() $$;`)
+  L.push(
+    '-- quien gestiona usuarios no puede nombrar administradores (solo un admin) ni cambiarse su propio rol',
+    `create or replace function public.cuidar_perfil() returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then return new; end if; -- SQL Editor, servidor o funciones internas
+  if new.rol is distinct from old.rol and new.id = auth.uid() then raise exception 'No puedes cambiar tu propio rol'; end if;
+  if (new.rol = 'admin' or old.rol = 'admin') and new.rol is distinct from old.rol and not public.es_admin() then raise exception 'Solo un administrador puede dar o quitar el rol admin'; end if;
+  return new;
+end $$;`,
+    'drop trigger if exists cuidar_perfil on public.perfiles;',
+    'create trigger cuidar_perfil before update on public.perfiles for each row execute function public.cuidar_perfil();',
+    'drop policy if exists "perfil propio o admin" on public.perfiles;',
+    'drop policy if exists "admin gestiona perfiles" on public.perfiles;',
+    'drop policy if exists "ver perfiles" on public.perfiles;',
+    'drop policy if exists "gestionar perfiles" on public.perfiles;',
+    'create policy "ver perfiles" on public.perfiles for select to authenticated using (id = auth.uid() or (select public.gestiona_usuarios()));',
+    'create policy "gestionar perfiles" on public.perfiles for update to authenticated using ((select public.gestiona_usuarios())) with check ((select public.gestiona_usuarios()));',
+    'drop policy if exists "ver roles" on public.roles;',
+    'drop policy if exists "admin edita roles" on public.roles;',
+    'create policy "ver roles" on public.roles for select to authenticated using (true);',
+    'create policy "admin edita roles" on public.roles for all to authenticated using ((select public.es_admin())) with check ((select public.es_admin()));',
+    '-- cada usuario nuevo recibe su perfil (rol, nombre y sede pueden venir al crearlo desde la app)',
+    `create or replace function public.crear_perfil() returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.perfiles (id, nombre, correo, rol${columnasPerfil.map((c) => `, ${c}`).join('')})
+  values (new.id, coalesce(new.raw_user_meta_data->>'nombre', split_part(new.email, '@', 1)), new.email,
+    coalesce((select nombre from public.roles where nombre = new.raw_app_meta_data->>'rol'), ${literal(rolPorDefecto)})${columnasPerfil.map((c) => `, new.raw_app_meta_data->>'${c}'`).join('')})
+  on conflict (id) do nothing;
+  return new;
+end $$;`,
+    'drop trigger if exists crear_perfil on auth.users;',
+    'create trigger crear_perfil after insert on auth.users for each row execute function public.crear_perfil();',
+    "insert into public.perfiles (id, nombre, correo) select id, split_part(email, '@', 1), email from auth.users on conflict (id) do nothing;",
+    'update public.perfiles p set correo = u.email from auth.users u where u.id = p.id and p.correo is null;',
+    'create or replace function public.marcar_actualizado() returns trigger language plpgsql as $$ begin new.actualizado = now(); return new; end $$;',
+    '')
 
   for (const t of orden) {
-    L.push(`-- ============ ${t.nombre} (acceso: ${t.acceso}${t.columnaAcceso ? ` por ${t.columnaAcceso}` : ''}) ============`)
-    const defs = [`  id uuid primary key default gen_random_uuid()`]
+    L.push(`-- ============ ${t.nombre}${t.columnaAcceso ? ` (alcance "sede" por ${t.columnaAcceso})` : ''} ============`)
+    const defs = ['  id uuid primary key default gen_random_uuid()']
     for (const c of t.columnas) {
       let d = `  ${c.nombre} ${c.tipo}`
       if (c.requerido) d += ' not null'
@@ -106,9 +206,8 @@ export function sqlDeTablas(tablasEntrada) {
       if (c.tipoOriginal === 'correo') d += ` check (${c.nombre} ~* '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')`
       defs.push(d)
     }
-    defs.push(`  creado_por uuid default auth.uid() references auth.users(id) on delete set null`, `  creado timestamptz not null default now()`, `  actualizado timestamptz not null default now()`)
+    defs.push('  creado_por uuid default auth.uid() references auth.users(id) on delete set null', '  creado timestamptz not null default now()', '  actualizado timestamptz not null default now()')
     L.push(`create table if not exists public.${t.nombre} (`, defs.join(',\n'), ');')
-    // si la tabla ya existía, agrega las columnas que falten
     for (const c of t.columnas) L.push(`alter table public.${t.nombre} add column if not exists ${c.nombre} ${c.tipo};`)
     for (const c of t.columnas.filter((x) => x.referencia)) L.push(`create index if not exists ${t.nombre}_${c.nombre}_idx on public.${t.nombre} (${c.nombre});`)
     if (t.columnaAcceso) L.push(`create index if not exists ${t.nombre}_${t.columnaAcceso}_idx on public.${t.nombre} (${t.columnaAcceso});`)
@@ -116,32 +215,53 @@ export function sqlDeTablas(tablasEntrada) {
       `create trigger marcar_actualizado before update on public.${t.nombre} for each row execute function public.marcar_actualizado();`,
       `alter table public.${t.nombre} enable row level security;`,
       `alter table public.${t.nombre} replica identity full; -- el tiempo real envía la fila completa también al borrar`)
-    const pol = (nombre, para, usando, chequeo) => {
-      L.push(`drop policy if exists "${nombre}" on public.${t.nombre};`)
-      L.push(`create policy "${nombre}" on public.${t.nombre} for ${para} to authenticated${usando ? ` using (${usando})` : ''}${chequeo ? ` with check (${chequeo})` : ''};`)
-    }
-    // quita las políticas de un acceso anterior: si se cambia de 'autenticados' a 'propietario', no debe quedar abierta
-    for (const viejo of ['con sesion', 'leer', 'crear', 'cambiar', 'borrar', 'admin escribe']) L.push(`drop policy if exists "${viejo}" on public.${t.nombre};`)
-    if (t.acceso === 'autenticados') pol('con sesion', 'all', 'true', 'true')
-    else if (t.acceso === 'propietario') {
-      pol('leer', 'select', 'creado_por = auth.uid() or public.es_admin()')
-      pol('crear', 'insert', null, 'creado_por = auth.uid() or public.es_admin()')
-      pol('cambiar', 'update', 'creado_por = auth.uid() or public.es_admin()', 'creado_por = auth.uid() or public.es_admin()')
-      pol('borrar', 'delete', 'creado_por = auth.uid() or public.es_admin()')
-    } else if (t.acceso === 'por-columna') {
-      const cond = `${t.columnaAcceso} = public.mi_${t.columnaAcceso}() or public.es_admin()`
-      pol('leer', 'select', cond)
-      pol('crear', 'insert', null, cond)
-      pol('cambiar', 'update', cond, cond)
-      pol('borrar', 'delete', cond)
-    } else {
-      pol('leer', 'select', 'true')
-      pol('admin escribe', 'all', 'public.es_admin()', 'public.es_admin()')
-    }
-    L.push(`do $$ begin alter publication supabase_realtime add table public.${t.nombre}; exception when duplicate_object then null; end $$;`, '')
+    for (const viejo of ['con sesion', 'leer', 'crear', 'cambiar', 'borrar', 'admin escribe', 'rol leer', 'rol crear', 'rol cambiar', 'rol borrar']) L.push(`drop policy if exists "${viejo}" on public.${t.nombre};`)
+    const T = literal(t.nombre)
+    const dentro = `((select public.alcance(${T})) = 'todo'${t.columnaAcceso ? ` or ((select public.alcance(${T})) = 'sede' and ${t.columnaAcceso} = (select public.mi_${t.columnaAcceso}()))` : ''} or ((select public.alcance(${T})) = 'propio' and creado_por = auth.uid()))`
+    const cond = (accion) => `(select public.puede(${T}, '${accion}')) and ${dentro}`
+    L.push(`create policy "rol leer" on public.${t.nombre} for select to authenticated using (${cond('leer')});`,
+      `create policy "rol crear" on public.${t.nombre} for insert to authenticated with check (${cond('crear')});`,
+      `create policy "rol cambiar" on public.${t.nombre} for update to authenticated using (${cond('cambiar')}) with check (${cond('cambiar')});`,
+      `create policy "rol borrar" on public.${t.nombre} for delete to authenticated using (${cond('borrar')});`,
+      `do $$ begin alter publication supabase_realtime add table public.${t.nombre}; exception when duplicate_object then null; end $$;`, '')
   }
-  L.push('-- Primer administrador: cambia el correo y córrelo después de crear el usuario en Authentication → Users.',
-    `-- update public.perfiles set rol = 'admin' where id = (select id from auth.users where email = 'admin@tuempresa.com');`)
-  for (const c of columnasPerfil) L.push(`-- update public.perfiles set ${c} = 'Norte' where id = (select id from auth.users where email = 'equipo1@tuempresa.com');`)
-  return { sql: L.join('\n') + '\n', tablas: orden.map((t) => t.nombre), columnasPerfil }
+
+  L.push('-- ============ Automatizaciones: turnos (para que una tarea programada corra en un solo equipo) y corridas ============',
+    'create table if not exists public.automatizacion_turnos (',
+    '  clave text primary key,',
+    '  equipo text,',
+    '  usuario uuid default auth.uid(),',
+    '  tomado timestamptz not null default now()',
+    ');',
+    'create table if not exists public.automatizacion_corridas (',
+    '  id uuid primary key default gen_random_uuid(),',
+    '  automatizacion text not null,',
+    '  nombre text,',
+    '  equipo text,',
+    '  usuario uuid default auth.uid() references auth.users(id) on delete set null,',
+    '  inicio timestamptz,',
+    '  fin timestamptz not null default now(),',
+    '  ok boolean not null,',
+    '  disparo text,',
+    '  error text,',
+    '  resultado jsonb',
+    ');',
+    'create index if not exists automatizacion_corridas_fin_idx on public.automatizacion_corridas (fin desc);',
+    'alter table public.automatizacion_turnos enable row level security;',
+    'alter table public.automatizacion_corridas enable row level security;',
+    'drop policy if exists "tomar turno" on public.automatizacion_turnos;',
+    'drop policy if exists "ver turnos" on public.automatizacion_turnos;',
+    "create policy \"tomar turno\" on public.automatizacion_turnos for insert to authenticated with check ((select public.puede_automatizacion(split_part(clave, '@', 1))));",
+    'create policy "ver turnos" on public.automatizacion_turnos for select to authenticated using (true);',
+    'drop policy if exists "anotar corrida" on public.automatizacion_corridas;',
+    'drop policy if exists "ver corridas" on public.automatizacion_corridas;',
+    'create policy "anotar corrida" on public.automatizacion_corridas for insert to authenticated with check (usuario = auth.uid());',
+    'create policy "ver corridas" on public.automatizacion_corridas for select to authenticated using (usuario = auth.uid() or (select public.gestiona_usuarios()));',
+    "delete from public.automatizacion_turnos where tomado < now() - interval '30 days';",
+    'do $$ begin alter publication supabase_realtime add table public.automatizacion_corridas; exception when duplicate_object then null; end $$;',
+    '',
+    '-- Primer administrador: cambia el correo y córrelo después de crear tu usuario en Authentication → Users.',
+    "-- update public.perfiles set rol = 'admin' where correo = 'admin@tuempresa.com';",
+    '-- Después, los demás usuarios se crean desde la app (Usuarios y roles).')
+  return { sql: L.join('\n') + '\n', tablas: orden.map((t) => t.nombre), columnasPerfil, roles: roles.map((r) => r.nombre) }
 }
