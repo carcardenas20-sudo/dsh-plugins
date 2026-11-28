@@ -1,0 +1,14 @@
+{
+  "name": "dsh-escuadra",
+  "version": "0.1.0",
+  "description": "Varios agentes escribiendo código al tiempo sin pisarse: reparte el trabajo con dueños de archivos y dependencias, da a cada agente su copia del repo, integra por oleadas resolviendo conflictos, verifica, pide una revisión independiente y aplica el resultado",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "subagentes", "paralelo", "git-worktree"],
+  "author": "Carlos Cárdenas",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-escuadra" },
+  "engines": { "node": ">=22" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

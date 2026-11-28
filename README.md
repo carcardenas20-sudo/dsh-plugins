@@ -1,6 +1,6 @@
 # Plugins para DeepSeek Harness
 
-Diecisiete plugins para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh), sin dependencias y probados en dsh 0.2.2.
+Dieciocho plugins para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh), sin dependencias y probados en dsh 0.2.2.
 
 | Plugin | Para qué |
 | --- | --- |
@@ -15,6 +15,7 @@ Diecisiete plugins para [DeepSeek Harness](https://github.com/deepseek-ai/deepse
 | [dsh-segunda-opinion](plugins/dsh-segunda-opinion) | Otro modelo (V4-Pro) revisa los cambios antes de entregar y obliga a corregir errores reales. |
 | [dsh-piensa-antes](plugins/dsh-piensa-antes) | En tareas grandes obliga a planear (pasos, riesgos, pruebas) antes de editar; un arquitecto (V4-Pro) revisa el plan. |
 | [dsh-escritorio](plugins/dsh-escritorio) | Convierte la interfaz en app de escritorio para Windows y Mac con automatizaciones y robots que trabajan solos (horarios, carpetas, cambios en Supabase), datos en tiempo real y actualizaciones automáticas; la prueba abriéndola y compila en GitHub Actions. |
+| [dsh-escuadra](plugins/dsh-escuadra) | Varios agentes escribiendo código al tiempo: reparte con dueños de archivos y dependencias, cada agente en su copia del repo, integra por oleadas resolviendo conflictos, verifica, revisión independiente y aplica. |
 | [dsh-cristal](plugins/dsh-cristal) | Interfaces modernas y animadas: sistema de diseño (componentes, movimiento, oscuro, celular, Tailwind) con color de marca accesible, y revisión en navegador real que obliga a corregir. |
 | [dsh-transcriptor](plugins/dsh-transcriptor) | Voz a texto local (Whisper en tu PC): transcribe grabaciones con marcas de tiempo y avisos en lo que no se oyó bien, y dictado por voz desde una página local. |
 | [dsh-encargo](plugins/dsh-encargo) | Convierte un pedido corto en un encargo completo (lo no dicho, lo afectado, la lista de terminado), verifica que se cumpla antes de entregar y aprende de las omisiones que corriges. |
