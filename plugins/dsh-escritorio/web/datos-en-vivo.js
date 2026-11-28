@@ -23,8 +23,13 @@ const almacen = {
 }
 const esErrorDeRed = (e) => !e?.code && /fetch|network|Failed to fetch|NetworkError|ERR_INTERNET|timed? ?out/i.test(String(e?.message || e))
 
-export function crearDatos({ url, clave, opciones = {} }) {
-  const cliente = createClient(url, clave, opciones)
+export function crearDatos({ url, clave, opciones = {}, version } = {}) {
+  // En la app de escritorio cada pedido lleva la versión y el equipo: la base rechaza escrituras de apps
+  // por debajo de la versión mínima y la auditoría anota desde qué equipo se hizo cada cambio.
+  let info = null
+  try { info = disponible && window.escritorio?.infoAhora ? window.escritorio.infoAhora() : null } catch {}
+  const cabeceras = { ...(info?.version || version ? { 'x-app-version': String(info?.version || version) } : {}), ...(info?.equipo ? { 'x-equipo': String(info.equipo) } : {}) }
+  const cliente = createClient(url, clave, { ...opciones, global: { ...(opciones.global || {}), headers: { ...(opciones.global?.headers || {}), ...cabeceras } } })
   const prefijo = `datos:${new URL(url).host}:`
   const oyentesCola = new Set()
 
@@ -120,7 +125,7 @@ export function crearDatos({ url, clave, opciones = {} }) {
     usuario = s?.user || null
     sesionActual = s || null
     if (evento === 'TOKEN_REFRESHED') avisarEscritorio()
-    if (usuario?.id !== antes || evento === 'USER_UPDATED') setTimeout(async () => { await cargarPerfil().catch(() => {}); avisarSesion() }, 0)
+    if (usuario?.id !== antes || evento === 'USER_UPDATED') setTimeout(async () => { await cargarPerfil().catch(() => {}); avisarSesion(); subirErrores().catch(() => {}) }, 0)
     else avisarSesion()
   })
   const sesion = {
@@ -140,6 +145,37 @@ export function crearDatos({ url, clave, opciones = {} }) {
     puedeAutomatizacion: (id) => perfil?.rol === 'admin' || (rolActual?.automatizaciones || []).some((x) => x === '*' || x === id),
     recargar: async () => { await cargarPerfil().catch(() => {}); avisarSesion() },
     alCambiar: (fn) => { oyentesSesion.add(fn); fn(usuario, perfil); return () => oyentesSesion.delete(fn) },
+  }
+
+  function traducirError(e) {
+    const m = String(e?.message || e)
+    if (/row-level security|violates row-level/i.test(m)) return { ...e, message: 'No tienes permiso para esto, o esta versión de la app ya no puede guardar cambios (actualízala).' }
+    return e
+  }
+
+  // ---------- errores: se reportan a app_errores para que el administrador los vea (pestaña Sistema) ----------
+  const llaveErrores = `${prefijo}errores`
+  const recientes = new Map()
+  async function reportarError(origen, mensaje, detalle = '') {
+    const e = { origen, mensaje: String(mensaje).slice(0, 1000), detalle: String(detalle || '').slice(0, 4000), version: info?.version || version || null, equipo: info?.equipo || null }
+    const firma = `${e.origen}:${e.mensaje}`
+    if (Date.now() - (recientes.get(firma) || 0) < 60_000) return // el mismo error repetido en un minuto cuenta una vez
+    recientes.set(firma, Date.now())
+    const cola = [...almacen.leer(llaveErrores, []), e].slice(-50)
+    almacen.guardar(llaveErrores, cola)
+    await subirErrores()
+  }
+  async function subirErrores() {
+    const cola = almacen.leer(llaveErrores, [])
+    if (!cola.length || !usuario) return
+    const { error } = await cliente.from('app_errores').insert(cola.map((e) => ({ equipo: e.equipo, version: e.version, origen: e.origen, mensaje: e.mensaje, detalle: e.detalle })))
+    if (!error) almacen.guardar(llaveErrores, [])
+  }
+  if (disponible && !opciones.sinReporteDeErrores) {
+    window.addEventListener('error', (ev) => reportarError('interfaz', ev.message || 'Error', `${ev.filename || ''}:${ev.lineno || ''}\n${ev.error?.stack || ''}`))
+    window.addEventListener('unhandledrejection', (ev) => reportarError('interfaz', ev.reason?.message || String(ev.reason), ev.reason?.stack || ''))
+    window.escritorio?.alError?.((e) => reportarError(e.origen, e.mensaje, e.detalle))
+    window.escritorio?.erroresPendientes?.().then((l) => l.forEach((e) => reportarError(e.origen, e.mensaje, e.detalle))).catch(() => {})
   }
 
   // ---------- administración: usuarios (función del servidor) y roles ----------
@@ -175,6 +211,16 @@ export function crearDatos({ url, clave, opciones = {} }) {
         return error ? { ok: false, error: /foreign key|violates/i.test(error.message) ? 'Hay usuarios con ese rol: cámbiales el rol primero.' : error.message } : { ok: true }
       },
     },
+    /** Errores reportados por todos los equipos. */
+    async errores(limite = 100) { const { data, error } = await cliente.from('app_errores').select('*').order('creado', { ascending: false }).limit(limite); return error ? { ok: false, error: error.message } : { ok: true, errores: data } },
+    /** Historial de cambios: quién cambió qué y desde qué equipo. filtro: { tabla, fila } */
+    async auditoria({ tabla, fila, limite = 100 } = {}) { let q = cliente.from('auditoria').select('*').order('cuando', { ascending: false }).limit(limite); if (tabla) q = q.eq('tabla', tabla); if (fila) q = q.eq('fila', fila); const { data, error } = await q; return error ? { ok: false, error: error.message } : { ok: true, cambios: data } },
+    async migraciones() { const { data, error } = await cliente.from('migraciones').select('*').order('nombre'); return error ? { ok: false, error: error.message } : { ok: true, migraciones: data } },
+    /** Versión mínima de la app: por debajo, las apps se bloquean y la base no les deja guardar. */
+    versionMinima: {
+      async leer() { const { data } = await cliente.from('app_config').select('valor').eq('clave', 'version_minima').maybeSingle(); return data?.valor || null },
+      async fijar(v) { if (v && !/^\d+\.\d+\.\d+$/.test(v)) return { ok: false, error: 'Usa el formato 1.2.0' }; const { error } = v ? await cliente.from('app_config').upsert({ clave: 'version_minima', valor: v, actualizado: new Date().toISOString() }) : await cliente.from('app_config').delete().eq('clave', 'version_minima'); return error ? { ok: false, error: /row-level/i.test(error.message) ? 'Solo un administrador puede cambiarla.' : error.message } : { ok: true } },
+    },
     /** Corridas de automatizaciones de todos los equipos (quien gestiona usuarios las ve todas). */
     async corridas(limite = 50) { const { data, error } = await cliente.from('automatizacion_corridas').select('*').order('fin', { ascending: false }).limit(limite); return error ? { ok: false, error: error.message } : { ok: true, corridas: data } },
   }
@@ -197,14 +243,34 @@ export function crearDatos({ url, clave, opciones = {} }) {
   const leerCola = () => almacen.leer(llaveCola, [])
   const avisarCola = () => { const n = leerCola().length; oyentesCola.forEach((fn) => fn(n)); avisarConexion() }
 
+  // Conflictos: si la fila trae "actualizado" (la versión que vio el usuario) y en la base cambió desde entonces
+  // (otro equipo la editó), NO se pisa: se devuelve { conflicto } para que el usuario decida.
+  const conflictos = []
+  const oyentesConflicto = new Set()
+  const avisarConflictos = () => oyentesConflicto.forEach((fn) => fn([...conflictos]))
   async function aplicar(op) {
-    if (op.tipo === 'guardar') return cliente.from(op.tabla).upsert(op.fila, { onConflict: op.id }).select()
+    if (op.tipo === 'guardar') {
+      const fila = { ...op.fila }
+      const visto = fila.actualizado
+      if (visto && fila[op.id] !== undefined && !op.forzar) {
+        delete fila.actualizado
+        const r = await cliente.from(op.tabla).update(fila).eq(op.id, fila[op.id]).eq('actualizado', visto).select()
+        if (r.error || r.data?.length) return r
+        const actual = await cliente.from(op.tabla).select('*').eq(op.id, fila[op.id]).maybeSingle()
+        if (actual.error) return actual
+        if (actual.data) return { data: null, error: null, conflicto: { tabla: op.tabla, id: op.id, mio: op.fila, servidor: actual.data } }
+        return cliente.from(op.tabla).upsert(fila, { onConflict: op.id }).select() // la borraron: se vuelve a crear
+      }
+      delete fila.actualizado
+      return cliente.from(op.tabla).upsert(fila, { onConflict: op.id }).select()
+    }
     return cliente.from(op.tabla).delete().eq(op.id, op.valor)
   }
   async function enviarOEncolar(op) {
     try {
-      const { data, error } = await aplicar(op)
-      if (error) { if (esErrorDeRed(error)) throw error; return { ok: false, error } }
+      const { data, error, conflicto } = await aplicar(op)
+      if (conflicto) { conflictos.push(conflicto); avisarConflictos(); return { ok: false, conflicto } }
+      if (error) { if (esErrorDeRed(error)) throw error; return { ok: false, error: traducirError(error) } }
       return { ok: true, datos: data }
     } catch (e) {
       if (!esErrorDeRed(e)) return { ok: false, error: e }
@@ -219,8 +285,9 @@ export function crearDatos({ url, clave, opciones = {} }) {
     try {
       for (const op of leerCola()) {
         try {
-          const { error } = await aplicar(op)
+          const { error, conflicto } = await aplicar(op)
           if (error && esErrorDeRed(error)) break
+          if (conflicto) { conflictos.push(conflicto); avisarConflictos() }
           almacen.guardar(llaveCola, leerCola().slice(1)); avisarCola() // con error de datos se descarta para no trancar la cola
         } catch { break }
       }
@@ -240,6 +307,18 @@ export function crearDatos({ url, clave, opciones = {} }) {
     sesion,
     admin,
     conexion,
+    reportarError,
+    /** Conflictos pendientes: [{ tabla, id, mio, servidor }] */
+    conflictos: () => [...conflictos],
+    alConflicto: (fn) => { oyentesConflicto.add(fn); fn([...conflictos]); return () => oyentesConflicto.delete(fn) },
+    /** Resolver: 'mio' guarda tu versión encima de la del servidor; 'servidor' descarta la tuya. */
+    async resolverConflicto(indice, eleccion) {
+      const c = conflictos[indice]
+      if (!c) return { ok: false, error: 'No existe ese conflicto' }
+      conflictos.splice(indice, 1); avisarConflictos()
+      if (eleccion !== 'mio') return { ok: true }
+      return enviarOEncolar({ tipo: 'guardar', tabla: c.tabla, fila: c.mio, id: c.id, forzar: true })
+    },
     alCambiarConexion: (fn) => { oyentesConexion.add(fn); fn(conexion()); return () => oyentesConexion.delete(fn) },
   }
 }

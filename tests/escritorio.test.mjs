@@ -63,9 +63,19 @@ assert.match(await readFile(path.join(cwd, 'lib/datos-en-vivo.js'), 'utf8'), /ex
 assert.match(await readFile(path.join(cwd, 'lib/escritorio-ui.js'), 'utf8'), /customElements\.define/)
 assert.match(await readFile(path.join(cwd, 'lib/datos.js'), 'utf8'), /crearDatos\(\{ url: "https:\/\/abcd\.supabase\.co"[^]*conectarUI/)
 r = await tools.escritorio_datos.execute({ instalar: false, tablas: [{ nombre: 'Pagos', acceso: 'por-columna', columnas: [{ nombre: 'valor', tipo: 'dinero', requerido: true }, { nombre: 'sede', opciones: ['Norte', 'Sur'] }] }] }, {})
-assert.match(r, /supabase\/escritorio\.sql: pagos \+ perfiles \(rol admin\/usuario, sede\)[^]*SQL Editor[^]*Add user/)
-const sqlGen = await readFile(path.join(cwd, 'supabase/escritorio.sql'), 'utf8')
-assert.match(sqlGen, /enable row level security[^]*mi_sede\(\)[^]*supabase_realtime add table public\.pagos/)
+assert.match(r, /Migraciones nuevas[^]*001_inicio\.sql[^]*aplicar-todo\.sql: todas las migraciones \(1\)[^]*copia-de-seguridad\.js[^]*SQL Editor[^]*Add user/)
+const sqlGen = await readFile(path.join(cwd, 'supabase/aplicar-todo.sql'), 'utf8')
+assert.match(sqlGen, /-- huella: \w+[^]*migraciones where nombre = '001_inicio'[^]*enable row level security[^]*mi_sede\(\)[^]*supabase_realtime add table public\.pagos[^]*insert into public\.migraciones/)
+// la copia de seguridad generada es JavaScript válido y corre en el equipo del admin
+const copia = (await import('node:module')).createRequire(import.meta.url)(path.join(cwd, 'escritorio/automatizaciones/copia-de-seguridad.js'))
+assert.deepEqual(copia.correEn, { rol: 'admin' }); assert.equal(copia.cuando.cron, '0 20 * * *'); assert.equal(typeof copia.ejecutar, 'function')
+// mismas tablas: no hay migración nueva; un cambio destructivo sin confirmar se rechaza; confirmado va primero
+r = await tools.escritorio_datos.execute({ instalar: false, tablas: [{ nombre: 'Pagos', acceso: 'por-columna', columnas: [{ nombre: 'valor', tipo: 'dinero', requerido: true }, { nombre: 'sede', opciones: ['Norte', 'Sur'] }] }] }, {})
+assert.match(r, /no cambiaron: no hace falta migración nueva/)
+assert.match(await tools.escritorio_datos.execute({ instalar: false, cambios: [{ tipo: 'quitar-columna', tabla: 'pagos', columna: 'valor' }] }, {}), /❌ Cambios: .*confirmar/)
+r = await tools.escritorio_datos.execute({ instalar: false, cambios: [{ tipo: 'renombrar-columna', tabla: 'pagos', de: 'valor', a: 'monto' }], tablas: [{ nombre: 'Pagos', acceso: 'por-columna', columnas: [{ nombre: 'monto', tipo: 'dinero', requerido: true }, { nombre: 'sede', opciones: ['Norte', 'Sur'] }] }] }, {})
+assert.match(r, /002_cambios\.sql \(pagos: valor → monto\)[^]*003_tablas\.sql[^]*versión mínima/)
+assert.deepEqual((await readdir(path.join(cwd, 'supabase/migraciones'))).sort(), ['001_inicio.sql', '002_cambios.sql', '003_tablas.sql'])
 assert.match(await tools.escritorio_datos.execute({ instalar: false, tablas: [{ nombre: 'x', columnas: [{ nombre: 'id' }] }] }, {}), /❌ Tablas: .*la agrega el plugin/)
 
 // sitio de descargas del cliente

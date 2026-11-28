@@ -40,7 +40,7 @@ function cronEnPalabras(expr) {
   return `${dias}, ${cuando}`
 }
 
-function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, notificar, alEventoInterfaz, registrar = () => {}, armarDisparadores = true }) {
+function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, notificar, alEventoInterfaz, registrar = () => {}, armarDisparadores = true, pedirSecreto = () => null, alError = () => {} }) {
   const autos = new Map() // id → { meta, disparadores, activa, ejecutando, cola, ultima, proxima, temporizadores, vigilantes }
   const archivoMotor = path.join(carpetaDatos, 'motor.json')
   const archivoHistorial = path.join(carpetaDatos, 'historial.jsonl')
@@ -141,7 +141,7 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
       permitida: perm.ok, correAqui: aqui.ok, bloqueo: !perm.ok ? perm.motivo : !aqui.ok ? aqui.motivo : null,
       id: a.id, nombre: a.meta.nombre || a.id, descripcion: a.meta.descripcion || '', error: a.error || null,
       cuando: a.disparadores.map(textoCuando), activa: a.activa, ejecutando: !!a.proceso, enCola: a.cola.length,
-      progreso: a.progreso || null, enPrueba: a.meta.enPrueba, proxima: a.proxima ? a.proxima.toISOString() : null, ultima: a.ultima || null,
+      progreso: a.progreso || null, enPrueba: a.meta.enPrueba, secretos: a.meta.secretos || [], proxima: a.proxima ? a.proxima.toISOString() : null, ultima: a.ultima || null,
       tiposDisparo: a.disparadores.map((d) => d.cron ? 'cron' : d.cada ? 'cada' : d.carpeta ? 'carpeta' : d.tabla ? 'tabla' : d.alIniciar ? 'alIniciar' : 'manual'),
     }
   }
@@ -199,7 +199,10 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
           const espera = Math.min(30e3 * 2 ** trabajo.intento, 15 * 60e3)
           anotarRegistro(`reintento ${trabajo.intento + 1} de ${reintentos} en ${Math.round(espera / 1000)} s`)
           setTimeout(() => { a.cola.unshift({ ...trabajo, intento: trabajo.intento + 1 }); bombear(); cambio() }, espera)
-        } else if (a.meta.avisarError !== false) notificar(`${a.meta.nombre || a.id} falló`, entrada.error || 'Error desconocido', a.id)
+        } else {
+          if (a.meta.avisarError !== false) notificar(`${a.meta.nombre || a.id} falló`, entrada.error || 'Error desconocido', a.id)
+          try { alError(a.id, entrada.error || 'Error desconocido') } catch {}
+        }
       } else if (a.meta.avisarExito) {
         notificar(a.meta.nombre || a.id, typeof r.resultado === 'string' ? r.resultado : 'Terminó bien', a.id)
       }
@@ -213,6 +216,7 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
       else if (m.tipo === 'interfaz') alEventoInterfaz({ id: a.id, evento: m.evento, datos: m.datos })
       else if (m.tipo === 'encadenar') { if (autos.has(m.id)) encolar(m.id, { tipo: 'encadenada', desde: a.id, datos: m.datos }); else anotarRegistro(`⚠ no existe la automatización "${m.id}"`) }
       else if (m.tipo === 'progreso') { a.progreso = { porcentaje: m.porcentaje, texto: m.texto || '' }; cambio() }
+      else if (m.tipo === 'secreto') { let valor = null; try { valor = pedirSecreto(a.id, String(m.nombre)) } catch {} ; try { p.postMessage({ tipo: 'secreto-respuesta', pedido: m.pedido, valor }) } catch {} }
       else if (m.tipo === 'fin') terminar(m)
     })
     p.on('exit', (codigo) => terminar({ ok: false, error: `El proceso de la automatización se cerró inesperadamente (código ${codigo}).` }))

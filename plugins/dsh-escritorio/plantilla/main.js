@@ -162,7 +162,74 @@ ipcMain.handle('archivos:guardar', async (ev, op = {}) => {
 ipcMain.handle('archivos:mostrar', (ev, ruta) => { if (permitidoIpc(ev) && typeof ruta === 'string') shell.showItemInFolder(ruta) })
 ipcMain.handle('notificar', (ev, titulo, cuerpo) => { if (permitidoIpc(ev) && Notification.isSupported()) new Notification({ title: String(titulo).slice(0, 120), body: String(cuerpo ?? '').slice(0, 400), icon: ICONO }).show() })
 ipcMain.handle('externo', (ev, url) => { if (permitidoIpc(ev) && /^https?:\/\//i.test(String(url))) shell.openExternal(String(url)) })
-ipcMain.handle('info', () => ({ nombre: CONFIG.nombre, version: app.getVersion(), plataforma: process.platform }))
+ipcMain.handle('info', () => ({ nombre: CONFIG.nombre, version: app.getVersion(), plataforma: process.platform, equipo: EQUIPO }))
+// la interfaz necesita versión y equipo al crear la conexión (cabeceras x-app-version y x-equipo)
+ipcMain.on('info-sync', (ev) => { ev.returnValue = permitidoIpc(ev) ? { version: app.getVersion(), equipo: EQUIPO, plataforma: process.platform } : null })
+
+// ---------- errores: se guardan en el equipo y la interfaz los sube a la base (app_errores) ----------
+const EQUIPO = String(CONFIG.equipo || require('node:os').hostname())
+const erroresPendientes = []
+function registrarError(origen, error, detalle) {
+  const e = { origen, mensaje: String(error?.message || error).slice(0, 1000), detalle: String(detalle || error?.stack || '').slice(0, 4000), version: app.getVersion(), equipo: EQUIPO, cuando: new Date().toISOString() }
+  try { fs.appendFileSync(path.join(app.getPath('userData'), 'errores.log'), JSON.stringify(e) + '\n') } catch {}
+  erroresPendientes.push(e); if (erroresPendientes.length > 200) erroresPendientes.shift()
+  for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('error-app', e)
+}
+process.on('uncaughtException', (e) => registrarError('app', e))
+process.on('unhandledRejection', (e) => registrarError('app', e))
+app.on('render-process-gone', (_e, _wc, d) => registrarError('interfaz', `La ventana se cerró inesperadamente (${d.reason})`, JSON.stringify(d)))
+app.on('child-process-gone', (_e, d) => { if (d.type !== 'Utility') registrarError('app', `Proceso ${d.type} terminó (${d.reason})`, JSON.stringify(d)) })
+// la interfaz pide los errores que ocurrieron antes de que cargara o de que hubiera sesión
+ipcMain.handle('errores-pendientes', (ev) => (permitidoIpc(ev) ? erroresPendientes.splice(0) : []))
+
+// ---------- datos privados de cada equipo (claves de los robots), cifrados con el llavero del sistema ----------
+const archivoSecretos = () => path.join(app.getPath('userData'), 'secretos.json')
+const leerSecretos = () => { try { return JSON.parse(fs.readFileSync(archivoSecretos(), 'utf8')) } catch { return {} } }
+function guardarSecreto(id, nombre, valor) {
+  const { safeStorage } = require('electron')
+  const todos = leerSecretos()
+  todos[id] ||= {}
+  if (valor === null || valor === '') delete todos[id][nombre]
+  else {
+    // Windows usa DPAPI y Mac el Llavero. Linux sin llavero (gnome-keyring/kwallet) solo ofrece un cifrado básico.
+    if (!safeStorage.isEncryptionAvailable() && process.platform === 'linux' && safeStorage.setUsePlainTextEncryption) { safeStorage.setUsePlainTextEncryption(true); registrar('aviso: Linux sin llavero del sistema; los datos privados usan cifrado básico') }
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('Este equipo no tiene cifrado disponible para guardar claves')
+    todos[id][nombre] = safeStorage.encryptString(String(valor)).toString('base64')
+  }
+  fs.writeFileSync(archivoSecretos(), JSON.stringify(todos, null, 2), { mode: 0o600 })
+}
+function leerSecreto(id, nombre) {
+  const prueba = process.env.DSH_ESCRITORIO_SECRETOS && PRUEBA ? JSON.parse(process.env.DSH_ESCRITORIO_SECRETOS) : null
+  if (prueba && prueba[`${id}.${nombre}`] !== undefined) return String(prueba[`${id}.${nombre}`])
+  const cifrado = leerSecretos()[id]?.[nombre]
+  if (!cifrado) return null
+  try { const { safeStorage } = require('electron'); if (!safeStorage.isEncryptionAvailable() && process.platform === 'linux' && safeStorage.setUsePlainTextEncryption) safeStorage.setUsePlainTextEncryption(true); return safeStorage.decryptString(Buffer.from(cifrado, 'base64')) } catch { return null }
+}
+const estadoSecretos = (id) => Object.keys(leerSecretos()[id] || {})
+
+// ---------- versión mínima: por debajo de ella la app se bloquea y pide actualizar ----------
+const comparar = (a, b) => { const x = String(a).split(/[.-]/).map(Number), y = String(b).split(/[.-]/).map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0) } return 0 }
+let bloqueada = null
+async function revisarVersionMinima() {
+  if (PRUEBA || bloqueada) return
+  const minimas = []
+  try { if (CONFIG.sitio) { const r = await net.fetch(new URL('version.json', CONFIG.sitio).toString(), { cache: 'no-store' }); if (r.ok) { const v = await r.json(); if (v.minima) minimas.push(v.minima) } } } catch {}
+  try {
+    if (CONFIG.supabase?.url) {
+      const r = await net.fetch(`${CONFIG.supabase.url}/rest/v1/app_config?clave=eq.version_minima&select=valor`, { headers: { apikey: CONFIG.supabase.clave, Authorization: `Bearer ${CONFIG.supabase.clave}` } })
+      if (r.ok) { const [f] = await r.json(); if (f?.valor) minimas.push(f.valor) }
+    }
+  } catch {}
+  const minima = minimas.sort(comparar).at(-1)
+  if (!minima || comparar(app.getVersion(), minima) >= 0) return
+  bloqueada = minima
+  registrar(`versión ${app.getVersion()} bloqueada: la mínima es ${minima}`)
+  try { motor?.detener() } catch {}
+  fijarActualizacion({ estado: 'obligatoria', version: minima })
+  if (ventana && !ventana.isDestroyed()) { ventana.loadURL(`app://motor/bloqueo.html?actual=${encodeURIComponent(app.getVersion())}&minima=${encodeURIComponent(minima)}&nombre=${encodeURIComponent(CONFIG.nombre)}`); mostrar() }
+  aviso(`${CONFIG.nombre}: actualización obligatoria`, `Esta versión (${app.getVersion()}) ya no se puede usar. Descarga la ${minima} o superior.`, abrirPaginaVersiones)
+}
+ipcMain.handle('version:abrir-descargas', (ev) => { if (permitidoIpc(ev)) abrirPaginaVersiones() })
 ipcMain.handle('inicio-sistema', (ev, activar) => { if (permitidoIpc(ev)) { if (typeof activar === 'boolean') app.setLoginItemSettings({ openAtLogin: activar }); return app.getLoginItemSettings().openAtLogin } })
 
 // ---------- actualizaciones automáticas (cuando hay versiones publicadas en GitHub) ----------
@@ -257,6 +324,8 @@ function iniciarMotor({ armar = true } = {}) {
     avisar: (lista) => { for (const w of ventanasVivas()) w.webContents.send('automatizaciones', lista); menuBandeja() },
     notificar: (titulo, cuerpo, id) => aviso(titulo, cuerpo, () => abrirPanel(id)),
     alEventoInterfaz: (e) => { for (const w of ventanasVivas()) w.webContents.send('automatizacion:evento', e) },
+    pedirSecreto: (id, nombre) => leerSecreto(id, nombre),
+    alError: (id, error) => registrarError('automatizacion', `${id}: ${error}`),
   })
   return motor.cargar()
 }
@@ -281,6 +350,8 @@ ipcMain.handle('auto:cancelar', (ev, id) => { exigir(ev); motor.cancelar(String(
 ipcMain.handle('auto:historial', (ev, id, n) => { exigir(ev); return motor.historial(id ? String(id) : null, Math.min(Number(n) || 50, 500)) })
 ipcMain.handle('auto:sesion', (ev, s, info) => { if (!permitidoIpc(ev)) throw new Error('no permitido'); if (!motor) return false; motor.fijarSesion(s, info); return true })
 ipcMain.handle('auto:panel', (ev, id) => { if (!permitidoIpc(ev)) throw new Error('no permitido'); abrirPanel(id); return true })
+ipcMain.handle('auto:secretos', (ev, id) => { exigir(ev); return estadoSecretos(String(id)) })
+ipcMain.handle('auto:secreto-guardar', (ev, id, nombre, valor) => { exigir(ev); guardarSecreto(String(id), String(nombre), valor); return estadoSecretos(String(id)) })
 ipcMain.handle('auto:abrir-archivo', (ev, f) => {
   if (!permitidoIpc(ev)) throw new Error('no permitido')
   const r = path.resolve(String(f))
@@ -359,6 +430,7 @@ app.whenReady().then(() => {
   buscarActualizaciones()
   if (PRUEBA) modoPrueba()
   else iniciarMotor()
+  if (!PRUEBA && (CONFIG.sitio || CONFIG.supabase?.url)) { setTimeout(revisarVersionMinima, 4000); setInterval(revisarVersionMinima, 30 * 60e3) }
 })
 app.on('activate', mostrar) // Mac: clic en el ícono del dock
 app.on('before-quit', () => { saliendo = true })

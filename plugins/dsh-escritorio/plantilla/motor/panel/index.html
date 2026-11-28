@@ -131,10 +131,18 @@ async function pintarDetalle() {
   $('marco').classList.toggle('sin-detalle', !a)
   if (!a) return
   const corridas = await api.historial(a.id, 30)
+  const guardados = a.secretos?.length ? await api.secretos(a.id) : []
   const disparo = (d) => ({ cron: 'por horario', cada: 'por intervalo', carpeta: `archivo nuevo: ${d.nombre || ''}`, tabla: `cambio en ${d.tabla} (${d.evento})`, manual: 'a mano', interfaz: 'desde la app', alIniciar: 'al abrir', encadenada: `después de ${d.desde}`, prueba: 'prueba' }[d.tipo] || d.tipo)
   $('detalle').innerHTML = `
     <div class="fila"><h2>${esc(a.nombre)}</h2><button data-cerrar>Cerrar</button></div>
     <p class="sub">${a.cuando.map(esc).join(' · ')}</p>
+    ${a.secretos?.length ? `<form class="corrida" data-secretos="${esc(a.id)}">
+      <b>Datos privados de este equipo</b>
+      <p class="sub" style="margin:4px 0 10px">Se guardan cifrados solo en este PC (nunca en el instalador ni en la nube).</p>
+      ${a.secretos.map((s) => `<label style="display:grid;gap:4px;margin-bottom:10px;font-size:13px;font-weight:600">${esc(s.etiqueta || s.nombre)} ${guardados.includes(s.nombre) ? '<span class="chip ok" style="justify-self:start">Guardado</span>' : '<span class="chip mal" style="justify-self:start">Falta</span>'}
+        <input type="${s.tipo === 'texto' ? 'text' : 'password'}" name="${esc(s.nombre)}" autocomplete="off" placeholder="${guardados.includes(s.nombre) ? 'Escribe para reemplazar' : 'Escribe el valor'}" style="font:inherit;padding:8px 10px;border-radius:9px;border:1px solid var(--linea);background:var(--capa-2);color:var(--texto)"></label>`).join('')}
+      <button class="primario" type="submit">Guardar en este equipo</button> <span data-estado class="sub"></span>
+    </form>` : ''}
     ${corridas.length ? corridas.map((c, i) => `
       <details class="corrida" ${i === 0 ? 'open' : ''}>
         <summary><span>${c.ok ? '<span class="chip ok">Bien</span>' : '<span class="chip mal">Falló</span>'} <span class="cuando">${fecha(c.inicio)} · ${dur(c.ms)} · ${esc(disparo(c.disparo || {}))}${c.intento > 1 ? ` · intento ${c.intento}` : ''}</span></span></summary>
@@ -156,6 +164,14 @@ document.addEventListener('click', async (ev) => {
   else if (acc === 'pausar') { const a = autos.find((x) => x.id === id); await api.activar(id, !a.activa) }
   else elegida = id
   pintar()
+})
+document.addEventListener('submit', async (ev) => {
+  const f = ev.target.closest('[data-secretos]'); if (!f) return
+  ev.preventDefault()
+  const id = f.dataset.secretos; let n = 0
+  try { for (const i of f.querySelectorAll('input')) if (i.value) { await api.guardarSecreto(id, i.name, i.value); n++ } f.querySelector('[data-estado]').textContent = n ? 'Guardado ✓' : 'No escribiste nada' }
+  catch (e) { f.querySelector('[data-estado]').textContent = String(e.message || e).replace(/^Error invoking remote method[^:]*: (Error: )?/, '') }
+  if (n) setTimeout(pintarDetalle, 600)
 })
 document.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.target.classList?.contains('tarjeta')) ev.target.click() })
 

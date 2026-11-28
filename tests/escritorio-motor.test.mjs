@@ -9,7 +9,7 @@ import path from 'node:path'
 
 const require = createRequire(import.meta.url)
 const Module = require('node:module')
-const turnos = new Set(), corridas = [], lanzados = []
+const turnos = new Set(), corridas = [], lanzados = [], respuestas = [], errores = []
 const supabaseFalso = {
   createClient: () => ({
     from: (t) => ({
@@ -27,6 +27,9 @@ const electronFalso = {
       const p = new EventEmitter()
       p.postMessage = (m) => {
         if (m.tipo === 'describir') setTimeout(() => p.emit('message', { tipo: 'descripcion', lista: m.archivos.map((archivo) => ({ archivo, ...metas[path.basename(archivo, '.js')] })) }), 5)
+        if (m.tipo === 'ejecutar' && m.datos.id === 'con-clave') { setTimeout(() => p.emit('message', { tipo: 'secreto', nombre: 'clave', pedido: 'p1' }), 5); return }
+        if (m.tipo === 'ejecutar' && m.datos.id === 'falla') { setTimeout(() => p.emit('message', { tipo: 'fin', ok: false, error: 'la plataforma no respondió', ms: 3 }), 5); return }
+        if (m.tipo === 'secreto-respuesta') { respuestas.push(m); setTimeout(() => p.emit('message', { tipo: 'fin', ok: m.valor === 'demo123', resultado: m.valor ? 'con clave' : null, error: m.valor ? null : 'falta', ms: 3 }), 5); return }
         if (m.tipo === 'ejecutar') { lanzados.push(m.datos.id); setTimeout(() => p.emit('message', { tipo: 'fin', ok: true, resultado: 'listo', ms: 3 }), 5) }
       }
       p.kill = () => {}
@@ -44,6 +47,8 @@ const metas = {
   'respaldo-local': { nombre: 'Respaldo local', cuando: { cada: '10s' }, unaVez: false },
   'cierre-caja': { nombre: 'Cierre de caja', cuando: { manual: true }, correEn: { sede: 'Norte' } },
   'reporte-gerencia': { nombre: 'Reporte gerencia', cuando: { manual: true } },
+  'con-clave': { nombre: 'Robot con clave', cuando: { manual: true }, secretos: [{ nombre: 'clave' }] },
+  falla: { nombre: 'Falla', cuando: { manual: true }, avisarError: false },
 }
 const dir = await mkdtemp(path.join(os.tmpdir(), 'motor-'))
 await mkdir(path.join(dir, 'autos'))
@@ -52,7 +57,8 @@ const espera = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function equipo(nombre) {
   const avisos = []
-  const m = crearMotor({ carpetaAutomatizaciones: path.join(dir, 'autos'), carpetaDatos: path.join(dir, nombre), config: { supabase: { url: 'https://x.supabase.co', clave: 'publica' }, equipo: nombre }, avisar: (l) => avisos.push(l), notificar() {}, alEventoInterfaz() {} })
+  const m = crearMotor({ carpetaAutomatizaciones: path.join(dir, 'autos'), carpetaDatos: path.join(dir, nombre), config: { supabase: { url: 'https://x.supabase.co', clave: 'publica' }, equipo: nombre }, avisar: (l) => avisos.push(l), notificar() {}, alEventoInterfaz() {},
+    pedirSecreto: (id, n) => (nombre === 'GERENCIA' && id === 'con-clave' && n === 'clave' ? 'demo123' : null), alError: (id, e) => errores.push([nombre, id, e]) })
   return { m, avisos }
 }
 const sesion = { access_token: 't', refresh_token: 'r' }
@@ -68,7 +74,15 @@ caja.m.fijarSesion(sesion, { id: 'u1', rol: 'cajero', sede: 'Norte', automatizac
 gerencia.m.fijarSesion(sesion, { id: 'u2', rol: 'gerente', sede: null, automatizaciones: ['*'] })
 assert.deepEqual(caja.m.lista().map((a) => a.id).sort(), ['cierre-caja', 'descargar-pagos', 'respaldo-local'], 'lo que su rol no permite ni se muestra')
 assert.throws(() => caja.m.ejecutar('reporte-gerencia'), /no existe|no tiene permiso/)
-assert.equal(gerencia.m.lista().length, 4)
+assert.equal(gerencia.m.lista().length, 6)
+// datos privados por equipo: Gerencia tiene la clave guardada, Caja no la tiene
+gerencia.m.ejecutar('con-clave'); await gerencia.m.esperarTodas(); await espera(30)
+assert.deepEqual(respuestas.at(-1), { tipo: 'secreto-respuesta', pedido: 'p1', valor: 'demo123' })
+assert.equal(gerencia.m.historial('con-clave', 1)[0].ok, true)
+assert.deepEqual(gerencia.m.lista().find((a) => a.id === 'con-clave').secretos, [{ nombre: 'clave' }])
+// los fallos van al reporte de errores
+gerencia.m.ejecutar('falla'); await gerencia.m.esperarTodas(); await espera(30)
+assert.deepEqual(errores.at(-1), ['GERENCIA', 'falla', 'la plataforma no respondió'])
 // correEn: "cierre-caja" solo se activa donde la sede es Norte
 assert.equal(caja.m.lista().find((a) => a.id === 'cierre-caja').correAqui, true)
 assert.match(gerencia.m.lista().find((a) => a.id === 'cierre-caja').bloqueo, /sede sea norte/)

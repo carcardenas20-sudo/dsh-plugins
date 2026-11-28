@@ -21,7 +21,7 @@ const plataformaDe = (n) => {
 const leerYml = (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }
 const versionDeYml = (t) => t?.match(/^version:\s*['"]?([^'"\s]+)/m)?.[1] || null
 
-function armar({ desde, salida, notas = '', config, pkg }) {
+function armar({ desde, salida, notas = '', minima = null, config, pkg }) {
   const carpetas = (Array.isArray(desde) ? desde : [desde]).map((d) => path.resolve(d)).filter((d) => fs.existsSync(d))
   if (!carpetas.length) throw new Error('No encontré carpetas con instaladores')
   const destino = path.resolve(salida)
@@ -50,7 +50,10 @@ function armar({ desde, salida, notas = '', config, pkg }) {
   }
   if (!Object.keys(archivos).length) throw new Error('No hay instaladores (.exe, .dmg, .AppImage) en esas carpetas: empaqueta primero')
   if (!fs.readdirSync(destino).some((n) => /^latest.*\.ya?ml$/.test(n))) throw new Error('Faltan los latest*.yml: empaqueta con la configuración de publicación del plugin')
-  const info = { nombre: config?.nombre || pkg?.productName || 'App', descripcion: config?.descripcionSitio || '', version, fecha: new Date().toISOString(), notas, archivos }
+  if (minima && !/^\d+\.\d+\.\d+$/.test(minima)) throw new Error(`versión mínima inválida: ${minima}`)
+  let anterior = null
+  try { anterior = JSON.parse(fs.readFileSync(path.join(destino, 'version.json'), 'utf8')) } catch {}
+  const info = { nombre: config?.nombre || pkg?.productName || 'App', descripcion: config?.descripcionSitio || '', version, minima: minima || anterior?.minima || null, fecha: new Date().toISOString(), notas, archivos }
   fs.writeFileSync(path.join(destino, 'version.json'), JSON.stringify(info, null, 2) + '\n')
   // la página: la del proyecto (editable) o la plantilla del plugin
   const pagina = [path.join(AQUI, 'descargas', 'index.html'), path.join(AQUI, 'scripts', 'pagina-descargas.html')].find((x) => fs.existsSync(x))
@@ -68,7 +71,7 @@ if (require.main === module) {
   try {
     const config = JSON.parse(fs.readFileSync(path.join(AQUI, 'escritorio.config.json'), 'utf8'))
     const pkg = JSON.parse(fs.readFileSync(path.join(AQUI, 'package.json'), 'utf8'))
-    const { destino, info } = armar({ desde: valores('desde').length ? valores('desde') : [path.join(AQUI, 'instaladores')], salida: valores('salida')[0] || path.join(AQUI, 'sitio'), notas: valores('notas')[0] || '', config, pkg })
+    const { destino, info } = armar({ desde: valores('desde').length ? valores('desde') : [path.join(AQUI, 'instaladores')], salida: valores('salida')[0] || path.join(AQUI, 'sitio'), notas: valores('notas')[0] || '', minima: valores('minima')[0] || null, config, pkg })
     console.log(`✅ Sitio de descargas ${info.nombre} ${info.version} en ${destino} (${Object.keys(info.archivos).join(', ')})`)
   } catch (e) { console.error(`❌ ${e.message}`); process.exit(1) }
 }

@@ -10,6 +10,7 @@ const enviar = (m) => process.parentPort.postMessage(m)
 let cancelado = false
 const robots = []
 const fotos = [] // capturas tomadas con pagina.captura() durante la corrida
+const esperandoSecretos = new Map()
 
 function rutaDe(p) {
   if (!p) throw new Error('falta la ruta')
@@ -141,6 +142,12 @@ function crearContexto(d) {
     ejecutar: (id, datos) => enviar({ tipo: 'encadenar', id: String(id), datos }),
     progreso: (porcentaje, texto) => enviar({ tipo: 'progreso', porcentaje: Math.max(0, Math.min(100, Number(porcentaje) || 0)), texto }),
     pausa: (ms) => new Promise((r) => setTimeout(r, typeof ms === 'string' ? require('./cron.cjs').duracion(ms) : ms)),
+    /** Dato privado de ESTE equipo (clave de una plataforma…), guardado cifrado desde el panel. Nunca va en el instalador. */
+    secreto: (nombre) => new Promise((resolver, rechazar) => {
+      const pedido = Math.random().toString(36).slice(2)
+      esperandoSecretos.set(pedido, (valor) => (valor === null || valor === undefined ? rechazar(new Error(`Falta "${nombre}" en este equipo: guárdalo en el panel de Automatizaciones → ${d.id} → Datos privados.`)) : resolver(valor)))
+      enviar({ tipo: 'secreto', nombre: String(nombre), pedido })
+    }),
     cancelado: () => cancelado,
     archivos, estado, robot,
     // Se conecta solo al usarla: así una automatización sin base de datos no necesita configurarla.
@@ -199,7 +206,7 @@ async function describir(archivos) {
       const a = mod.default && !mod.ejecutar ? mod.default : mod
       if (typeof a.ejecutar !== 'function') throw new Error('no exporta ejecutar(ctx)')
       const limpio = (v) => JSON.parse(JSON.stringify(v ?? null))
-      lista.push({ archivo, nombre: a.nombre, descripcion: a.descripcion, cuando: limpio(a.cuando), tiempoMaximo: a.tiempoMaximo, reintentos: a.reintentos, avisarError: a.avisarError, avisarExito: a.avisarExito, activa: a.activa, ponerseAlDia: a.ponerseAlDia, enPrueba: a.enPrueba, correEn: limpio(a.correEn), unaVez: a.unaVez })
+      lista.push({ archivo, nombre: a.nombre, descripcion: a.descripcion, cuando: limpio(a.cuando), tiempoMaximo: a.tiempoMaximo, reintentos: a.reintentos, avisarError: a.avisarError, avisarExito: a.avisarExito, activa: a.activa, ponerseAlDia: a.ponerseAlDia, enPrueba: a.enPrueba, correEn: limpio(a.correEn), unaVez: a.unaVez, secretos: limpio((a.secretos || []).map((s) => (typeof s === 'string' ? { nombre: s } : s))) })
     } catch (e) { lista.push({ archivo, error: String(e?.message || e).split('\n')[0] }) }
   }
   enviar({ tipo: 'descripcion', lista })
@@ -210,4 +217,5 @@ process.parentPort.on('message', (ev) => {
   if (m?.tipo === 'describir') describir(m.archivos).finally(() => setTimeout(() => process.exit(0), 50))
   if (m?.tipo === 'ejecutar') ejecutar(m.datos).finally(() => setTimeout(() => process.exit(0), 50))
   if (m?.tipo === 'cancelar') { cancelado = true; cerrarRobots() }
+  if (m?.tipo === 'secreto-respuesta') { const f = esperandoSecretos.get(m.pedido); esperandoSecretos.delete(m.pedido); f?.(m.valor) }
 })

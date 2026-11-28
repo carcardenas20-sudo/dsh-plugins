@@ -17,6 +17,12 @@ contextBridge.exposeInMainWorld('escritorio', {
   abrirEnNavegador: (url) => ipcRenderer.invoke('externo', url),
   /** { nombre, version, plataforma } */
   info: () => ipcRenderer.invoke('info'),
+  /** { version, equipo, plataforma } al instante (para las cabeceras de la conexión a la base) */
+  infoAhora: () => ipcRenderer.sendSync('info-sync'),
+  /** Errores del proceso principal: alError((e) => …) y los que pasaron antes de cargar: erroresPendientes() */
+  alError: (fn) => { const h = (_e, x) => fn(x); ipcRenderer.on('error-app', h); return () => ipcRenderer.removeListener('error-app', h) },
+  erroresPendientes: () => ipcRenderer.invoke('errores-pendientes'),
+  abrirDescargas: () => ipcRenderer.invoke('version:abrir-descargas'),
   /** Consulta o cambia si la app arranca con el sistema. */
   iniciarConSistema: (activar) => ipcRenderer.invoke('inicio-sistema', activar),
   automatizaciones: {
@@ -31,6 +37,10 @@ contextBridge.exposeInMainWorld('escritorio', {
     sesion: (s, info) => ipcRenderer.invoke('auto:sesion', s ? { access_token: s.access_token, refresh_token: s.refresh_token } : null, info ? JSON.parse(JSON.stringify(info)) : null),
     abrirPanel: (id) => ipcRenderer.invoke('auto:panel', id),
     abrirArchivo: (f) => ipcRenderer.invoke('auto:abrir-archivo', f),
+    /** Nombres de los datos privados guardados en ESTE equipo para una automatización (nunca los valores). */
+    secretos: (id) => ipcRenderer.invoke('auto:secretos', id),
+    /** Guarda cifrado en este equipo (valor vacío = borrar). */
+    guardarSecreto: (id, nombre, valor) => ipcRenderer.invoke('auto:secreto-guardar', id, nombre, valor),
     /** Cambios de estado: alCambiar((lista) => …) */
     alCambiar: (fn) => { const h = (_e, l) => fn(l); ipcRenderer.on('automatizaciones', h); return () => ipcRenderer.removeListener('automatizaciones', h) },
     /** Mensajes de ctx.interfaz(evento, datos): alEvento(({ id, evento, datos }) => …) */

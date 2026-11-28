@@ -2,14 +2,14 @@
 // y se comprueban los permisos por rol, alcance (sede/propio/todo), usuarios y automatizaciones.
 import { PGlite } from '@electric-sql/pglite'
 import assert from 'node:assert/strict'
-import { sqlDeTablas } from '../plugins/dsh-escritorio/tablas.js'
+import { envolverMigracion, sqlDeCambios, sqlDeTablas } from '../plugins/dsh-escritorio/tablas.js'
 
 const db = new PGlite()
 await db.exec(`
 create schema auth;
 create table auth.users (id uuid primary key, email text, raw_user_meta_data jsonb default '{}', raw_app_meta_data jsonb default '{}');
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
-create role authenticated;
+create role authenticated; create role anon;
 grant usage on schema public, auth to authenticated;
 grant execute on function auth.uid() to authenticated;
 create publication supabase_realtime;
@@ -109,13 +109,48 @@ assert.match(await intenta(U.instr, `insert into public.automatizacion_turnos (c
 assert.equal(await intenta(U.cajaN, `insert into public.automatizacion_corridas (automatizacion, equipo, ok) values ('descargar-pagos', 'CAJA-NORTE', true)`), 'ok')
 assert.equal(await cuenta(U.gerente, 'automatizacion_corridas'), 1); assert.equal(await cuenta(U.instr, 'automatizacion_corridas'), 0)
 
+// versión mínima: las apps viejas no pueden escribir (la web y el SQL Editor sí)
+const conVersion = async (u, v, q) => { await db.exec(`set role authenticated; select set_config('request.jwt.claim.sub', '${u}', false); select set_config('request.headers', '${JSON.stringify({ 'x-app-version': v, 'x-equipo': 'CAJA-NORTE' })}', false);`); try { return await db.query(q) } finally { await db.exec("reset role; select set_config('request.headers', '', false)") } }
+const intentaV = async (u, v, q) => { try { await conVersion(u, v, q); return 'ok' } catch (e) { return e.message } }
+assert.match(await intenta(U.gerente, `insert into public.app_config (clave, valor) values ('version_minima', '1.3.0')`), /row-level security/)
+await como(U.admin, `insert into public.app_config (clave, valor) values ('version_minima', '1.3.0')`)
+assert.match(await intentaV(U.cajaN, '1.2.9', `insert into public.pagos (aprendiz, valor, sede) values ('${idLaura}', 1, 'Norte')`), /row-level security/)
+assert.equal(await intentaV(U.cajaN, '1.10.0', `insert into public.pagos (aprendiz, valor, sede) values ('${idLaura}', 2, 'Norte')`), 'ok', '1.10.0 es mayor que 1.3.0 (no comparación de texto)')
+assert.equal((await conVersion(U.cajaN, '1.0.0', 'select count(*)::int n from public.pagos')).rows[0].n, 2, 'leer sí puede, para que vea el aviso')
+await db.exec("delete from public.app_config")
+// auditoría: quién cambió qué, desde qué equipo
+const aud = (await db.query(`select tabla, accion, usuario, equipo, antes->>'valor' antes, despues->>'valor' despues from public.auditoria where tabla = 'pagos' order by id`)).rows
+assert.ok(aud.length >= 3); assert.equal(aud.at(-1).equipo, 'CAJA-NORTE'); assert.equal(aud.at(-1).usuario, U.cajaN)
+assert.ok(aud.some((x) => x.accion === 'update' && x.antes === '150000.50' && x.despues === '160000.00'))
+assert.equal((await como(U.cajaN, 'select count(*)::int n from public.auditoria')).rows[0].n, 0, 'solo quien gestiona ve la auditoría')
+assert.ok((await como(U.gerente, 'select count(*)::int n from public.auditoria')).rows[0].n > 0)
+const antesUpd = (await db.query('select count(*)::int n from public.auditoria')).rows[0].n
+await db.exec(`update public.pagos set valor = valor`)
+assert.equal((await db.query('select count(*)::int n from public.auditoria')).rows[0].n, antesUpd, 'un update que no cambia nada no ensucia la auditoría')
+// errores de los equipos
+assert.equal(await intenta(U.cajaN, `insert into public.app_errores (equipo, version, origen, mensaje) values ('CAJA-NORTE', '1.2.0', 'interfaz', 'TypeError: x is undefined')`), 'ok')
+assert.equal((await como(U.cajaN, 'select count(*)::int n from public.app_errores')).rows[0].n, 0); assert.equal((await como(U.gerente, 'select count(*)::int n from public.app_errores')).rows[0].n, 1)
+
+// migraciones: se aplican una vez y quedan registradas; los cambios destructivos dejan copia
+const m1 = envolverMigracion('002_cambios', sqlDeCambios([{ tipo: 'renombrar-columna', tabla: 'aprendices', de: 'correo', a: 'email' }, { tipo: 'quitar-columna', tabla: 'notas', columna: 'texto', confirmar: true }], { fecha: new Date('2026-11-28') }).sql, 'renombra correo y quita notas.texto')
+await db.exec(m1); await db.exec(m1)
+const colsAp = (await db.query(`select column_name from information_schema.columns where table_name = 'aprendices'`)).rows.map((r) => r.column_name)
+assert.ok(colsAp.includes('email') && !colsAp.includes('correo'))
+assert.equal((await db.query(`select texto from public.respaldo_notas_texto_20261128`)).rows[0].texto, 'mía')
+assert.deepEqual((await db.query('select nombre from public.migraciones')).rows.map((r) => r.nombre), ['002_cambios'])
+const m2 = envolverMigracion('003_tabla', sqlDeCambios([{ tipo: 'renombrar-tabla', de: 'notas', a: 'apuntes' }]).sql)
+await db.exec(m2)
+assert.deepEqual((await db.query(`select permisos->'apuntes' p from public.roles where nombre = 'instructor'`)).rows[0].p, { acciones: ['leer', 'crear', 'cambiar', 'borrar'], alcance: 'propio' }, 'los permisos siguen a la tabla renombrada')
+assert.throws(() => sqlDeCambios([{ tipo: 'quitar-columna', tabla: 'pagos', columna: 'valor' }]), /confirmar/)
+assert.throws(() => sqlDeCambios([{ tipo: 'renombrar-tabla', de: 'roles', a: 'x' }]), /es del plugin/)
+
 // tiempo real
 const pub = (await db.query(`select tablename from pg_publication_tables where pubname = 'supabase_realtime' order by 1`)).rows.map((r) => r.tablename)
-assert.deepEqual(pub, ['aprendices', 'automatizacion_corridas', 'notas', 'pagos'])
+assert.deepEqual(pub, ['aprendices', 'apuntes', 'automatizacion_corridas', 'pagos'])
 
 // sin roles: se deducen del acceso de cada tabla (compatibilidad con 0.4)
 const db2 = new PGlite()
-await db2.exec(`create schema auth; create table auth.users (id uuid primary key, email text, raw_user_meta_data jsonb default '{}', raw_app_meta_data jsonb default '{}'); create function auth.uid() returns uuid language sql stable as $$ select null::uuid $$; create role authenticated; create publication supabase_realtime;`)
+await db2.exec(`create schema auth; create table auth.users (id uuid primary key, email text, raw_user_meta_data jsonb default '{}', raw_app_meta_data jsonb default '{}'); create function auth.uid() returns uuid language sql stable as $$ select null::uuid $$; create role authenticated; create role anon; create publication supabase_realtime;`)
 const s2 = sqlDeTablas([{ nombre: 'pagos', acceso: 'por-columna', columnas: [{ nombre: 'sede' }] }, { nombre: 'tarifas', acceso: 'solo-lectura', columnas: [{ nombre: 'valor', tipo: 'dinero' }] }])
 await db2.exec(s2.sql)
 const usuario = (await db2.query(`select permisos from public.roles where nombre = 'usuario'`)).rows[0].permisos

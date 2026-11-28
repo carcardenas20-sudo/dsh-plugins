@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const ls = new Map(); globalThis.localStorage = { getItem: (k) => ls.get(k) ?? null, setItem: (k, v) => ls.set(k, v) }
 const evs = {}; const escritorioRecibio = []
-globalThis.window = { addEventListener: (n, f) => ((evs[n] ||= []).push(f)), removeEventListener() {}, escritorio: { automatizaciones: { sesion: (s, info) => escritorioRecibio.push({ s, info }) } } }
+globalThis.window = { addEventListener: (n, f) => ((evs[n] ||= []).push(f)), removeEventListener() {}, escritorio: { infoAhora: () => ({ version: '1.4.0', equipo: 'CAJA-1' }), automatizaciones: { sesion: (s, info) => escritorioRecibio.push({ s, info }) } } }
 Object.defineProperty(globalThis, 'navigator', { value: { onLine: true }, configurable: true, writable: true })
 import { mkdtemp, readFile, writeFile, copyFile } from 'node:fs/promises'
 import os from 'node:os'
@@ -45,4 +45,18 @@ assert.deepEqual(escritorioRecibio.at(-1).info, { id: 'u1', nombre: 'Laura', rol
 assert.equal(escritorioRecibio.at(-1).s.user.email, 'a@b.co')
 await d.sesion.salir(); await espera(); assert.deepEqual(ses.at(-1), [null, null])
 assert.equal(escritorioRecibio.at(-1).info, null)
+// conflictos: otro equipo cambió la fila después de que la vi
+estado.filas.pagos = [{ id: 1, sede: 'Norte', valor: 10, actualizado: '2026-11-28T10:00:00.000Z' }]
+let r = await d.guardar('pagos', { id: 1, valor: 11, actualizado: '2026-11-28T10:00:00.000Z' })
+assert.equal(r.ok, true); assert.equal(estado.filas.pagos[0].valor, 11)
+const vista = { id: 1, valor: 99, actualizado: '2026-11-28T10:00:00.000Z' } // versión vieja
+r = await d.guardar('pagos', vista)
+assert.equal(r.ok, false); assert.equal(r.conflicto.servidor.valor, 11); assert.equal(estado.filas.pagos[0].valor, 11, 'no se pisó lo del otro equipo')
+let vistosConf = []; d.alConflicto((l) => vistosConf.push(l.length)); assert.equal(d.conflictos().length, 1)
+assert.equal((await d.resolverConflicto(0, 'mio')).ok, true); assert.deepEqual(estado.escrituras.at(-1), ['upsert', 'pagos', { id: 1, valor: 99 }]); assert.equal(d.conflictos().length, 0)
+// errores: se suben con equipo y versión cuando hay sesión; sin sesión quedan en cola
+await d.sesion.entrar('a@b.co', 'bien123'); await espera()
+await d.reportarError('interfaz', 'TypeError: x', 'pila'); await d.reportarError('interfaz', 'TypeError: x', 'pila')
+assert.equal(estado.insertados.app_errores.length, 1, 'el mismo error en un minuto cuenta una vez')
+assert.deepEqual({ ...estado.insertados.app_errores[0], detalle: undefined }, { equipo: 'CAJA-1', version: '1.4.0', origen: 'interfaz', mensaje: 'TypeError: x', detalle: undefined })
 parar(); console.log('datos-en-vivo: ok (filtro, orden, insert/update/delete en vivo, copia local, cola, conexión, sesión)')

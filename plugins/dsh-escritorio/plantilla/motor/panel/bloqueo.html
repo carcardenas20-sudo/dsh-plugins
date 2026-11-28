@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' app:; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Actualización obligatoria</title>
+<style>
+:root{--fondo:#f5f5f7;--sup:#fff;--tinta:#1d1d1f;--suave:#6e6e73;--borde:rgba(0,0,0,.08);--acento:#0a66ff;color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--fondo:#000;--sup:#1c1c1e;--tinta:#f5f5f7;--suave:#98989d;--borde:rgba(255,255,255,.1);--acento:#3b8bff}}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--fondo);color:var(--tinta);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif}
+.tarjeta{width:min(460px,calc(100% - 40px));background:var(--sup);border:1px solid var(--borde);border-radius:22px;padding:36px 32px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.08)}
+.icono{width:56px;height:56px;border-radius:16px;margin:0 auto 18px;display:grid;place-items:center;background:color-mix(in srgb,var(--acento) 14%,transparent);color:var(--acento);font-size:28px}
+h1{font-size:23px;letter-spacing:-.02em;margin:0 0 10px}p{color:var(--suave);margin:0 0 22px}
+button{font:inherit;font-weight:650;border:0;border-radius:999px;padding:13px 26px;background:var(--acento);color:#fff;cursor:pointer}
+small{display:block;margin-top:16px;color:var(--suave);font-size:13px}
+</style></head><body>
+<div class="tarjeta" role="alertdialog" aria-labelledby="t">
+  <div class="icono" aria-hidden="true">↻</div>
+  <h1 id="t">Hay que actualizar</h1>
+  <p id="m">Esta versión ya no se puede usar.</p>
+  <button id="b" type="button">Descargar la versión nueva</button>
+  <small>Instálala encima de esta: conservas tus datos.</small>
+</div>
+<script>
+const q = new URLSearchParams(location.search)
+document.getElementById('t').textContent = `Hay que actualizar ${q.get('nombre') || 'la app'}`
+document.getElementById('m').textContent = `Tienes la versión ${q.get('actual')} y ya se necesita la ${q.get('minima')} o superior para seguir trabajando con los datos.`
+document.getElementById('b').onclick = () => window.escritorio?.abrirDescargas?.()
+</script>
+</body></html>

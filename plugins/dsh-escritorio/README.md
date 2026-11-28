@@ -100,6 +100,23 @@ Qué decirle a DeepSeek:
 - Se puede elegir `modo: "automatica"` para que descargue e instale sola al cerrar.
 - La dirección queda dentro del instalador, así que hay que configurarla **antes** de entregar la primera versión.
 
+## Robustez para clientes reales
+
+- **Versión mínima obligatoria.** Cuando cambias la base de datos, fijas "desde la 1.3.0" en la pestaña Sistema o con `escritorio_empaquetar { minima }`. Los equipos con una versión menor muestran "Hay que actualizar" con el botón a la página de descargas, y la base rechaza sus cambios.
+- **Migraciones con historial.** Cada cambio de tablas queda como `supabase/migraciones/NNN_*.sql`: se aplica una sola vez y queda registrado. Renombrar o quitar columnas y tablas se hace con `cambios`: no se pierden datos al renombrar, y lo que se quita queda copiado en una tabla `respaldo_*`. `supabase/aplicar-todo.sql` se puede pegar entero cuantas veces sea.
+- **Errores de todos los equipos.** Los fallos de la app, de la interfaz y de las automatizaciones llegan a la pestaña **Sistema**, con equipo, versión y usuario. Si no hay internet o sesión, esperan en cola.
+- **Historial de cambios.** Queda registrado quién creó, cambió o borró cada registro, cuándo, desde qué equipo y qué valor tenía antes.
+- **Copia de seguridad diaria.** El equipo del administrador guarda todas las tablas cada día a las 8 pm (JSON y CSV, últimas 30 copias). Si el PC estaba apagado, la hace al abrirlo.
+- **Conflictos.** Si dos equipos editan el mismo registro, no se pisan. El indicador muestra "⚠ 1 conflicto" y el usuario elige qué versión queda.
+- **Claves de los robots en cada equipo.** Se guardan cifradas con el llavero de Windows o Mac desde el panel (Datos privados), nunca en el instalador. En el código se leen con `await secreto('clave')`.
+
+Probado en un proyecto real de Supabase:
+- inicio de sesión real;
+- la función del servidor creando un usuario y rechazando a quien no tiene permiso;
+- permisos por sede y rol;
+- la versión mínima rechazando a una app vieja por sus cabeceras;
+- la auditoría registrando el equipo.
+
 ## Herramientas
 
 | Herramienta | Qué hace |
@@ -151,5 +168,5 @@ Compila Windows, Mac y Linux, y publica solo si los tres salen bien. Las apps in
 Harness Desktop: **solo desde la app**, en Plugins → Add plugin:
 
 ```
-https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.6.0.tgz
+https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.7.0.tgz
 ```

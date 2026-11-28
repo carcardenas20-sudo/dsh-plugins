@@ -12,7 +12,7 @@ const TIPOS = {
 }
 const RESERVADAS = new Set(['user', 'order', 'group', 'table', 'select', 'from', 'where', 'limit', 'offset', 'default', 'check', 'primary', 'references', 'all', 'and', 'or', 'not', 'null', 'true', 'false', 'end', 'case', 'when', 'to', 'grant', 'column'])
 const AUTOMATICAS = new Set(['id', 'creado_por', 'creado', 'actualizado'])
-const PROPIAS = new Set(['perfiles', 'roles', 'automatizacion_turnos', 'automatizacion_corridas'])
+const PROPIAS = new Set(['perfiles', 'roles', 'automatizacion_turnos', 'automatizacion_corridas', 'app_config', 'app_errores', 'auditoria', 'migraciones'])
 export const ACCESOS = ['autenticados', 'propietario', 'por-columna', 'solo-lectura']
 export const ACCIONES = ['leer', 'crear', 'cambiar', 'borrar']
 export const ALCANCES = ['todo', 'sede', 'propio']
@@ -53,7 +53,7 @@ export function normalizarTablas(tablas) {
       columnaAcceso = nombreSql(t.columnaAcceso || 'sede', `La columna de acceso de ${nombre}`)
       if (!cols.has(columnaAcceso)) throw new Error(`${nombre}: la columna de acceso "${columnaAcceso}" no está entre sus columnas`)
     }
-    return { nombre, acceso, columnaAcceso, columnas }
+    return { nombre, acceso, columnaAcceso, columnas, auditar: t.auditar !== false }
   })
   for (const t of salida) for (const c of t.columnas) if (c.referencia && !nombres.has(c.referencia)) throw new Error(`${t.nombre}.${c.nombre} apunta a "${c.referencia}", que no está en esta lista de tablas`)
   return salida
@@ -191,6 +191,64 @@ end $$;`,
     "insert into public.perfiles (id, nombre, correo) select id, split_part(email, '@', 1), email from auth.users on conflict (id) do nothing;",
     'update public.perfiles p set correo = u.email from auth.users u where u.id = p.id and p.correo is null;',
     'create or replace function public.marcar_actualizado() returns trigger language plpgsql as $$ begin new.actualizado = now(); return new; end $$;',
+    '',
+    '-- ============ Sistema: versión mínima de la app, historial de migraciones, errores de los equipos y auditoría ============',
+    'create table if not exists public.app_config (clave text primary key, valor text, actualizado timestamptz not null default now());',
+    'alter table public.app_config enable row level security;',
+    'drop policy if exists "ver config" on public.app_config;',
+    'drop policy if exists "admin config" on public.app_config;',
+    'create policy "ver config" on public.app_config for select to anon, authenticated using (true);',
+    'create policy "admin config" on public.app_config for all to authenticated using ((select public.es_admin())) with check ((select public.es_admin()));',
+    "-- las apps de escritorio mandan su versión (x-app-version); por debajo de version_minima no pueden escribir",
+    `create or replace function public.version_app_ok() returns boolean language plpgsql stable security definer set search_path = public as $$
+declare minima text; actual text;
+begin
+  select valor into minima from public.app_config where clave = 'version_minima';
+  if coalesce(minima, '') = '' then return true; end if;
+  begin actual := nullif(current_setting('request.headers', true), '')::json ->> 'x-app-version'; exception when others then actual := null; end;
+  if actual is null then return true; end if; -- la web y el SQL Editor no llevan versión
+  return string_to_array(substring(actual from '^[0-9]+(?:\\.[0-9]+)*'), '.')::int[] >= string_to_array(substring(minima from '^[0-9]+(?:\\.[0-9]+)*'), '.')::int[];
+end $$;`,
+    'create table if not exists public.migraciones (nombre text primary key, resumen text, aplicada timestamptz not null default now());',
+    'alter table public.migraciones enable row level security;',
+    'drop policy if exists "ver migraciones" on public.migraciones;',
+    'create policy "ver migraciones" on public.migraciones for select to authenticated using ((select public.gestiona_usuarios()));',
+    'create table if not exists public.app_errores (',
+    '  id bigint generated always as identity primary key,',
+    '  equipo text, version text, origen text,',
+    '  usuario uuid default auth.uid() references auth.users(id) on delete set null,',
+    '  mensaje text not null, detalle text,',
+    '  creado timestamptz not null default now()',
+    ');',
+    'create index if not exists app_errores_creado_idx on public.app_errores (creado desc);',
+    'alter table public.app_errores enable row level security;',
+    'drop policy if exists "reportar error" on public.app_errores;',
+    'drop policy if exists "ver errores" on public.app_errores;',
+    'create policy "reportar error" on public.app_errores for insert to authenticated with check (usuario = auth.uid());',
+    'create policy "ver errores" on public.app_errores for select to authenticated using ((select public.gestiona_usuarios()));',
+    "delete from public.app_errores where creado < now() - interval '90 days';",
+    'create table if not exists public.auditoria (',
+    '  id bigint generated always as identity primary key,',
+    '  tabla text not null, fila uuid, accion text not null,',
+    '  antes jsonb, despues jsonb,',
+    '  usuario uuid default auth.uid(), equipo text,',
+    '  cuando timestamptz not null default now()',
+    ');',
+    'create index if not exists auditoria_fila_idx on public.auditoria (tabla, fila);',
+    'create index if not exists auditoria_cuando_idx on public.auditoria (cuando desc);',
+    'alter table public.auditoria enable row level security;',
+    'drop policy if exists "ver auditoria" on public.auditoria;',
+    'create policy "ver auditoria" on public.auditoria for select to authenticated using ((select public.gestiona_usuarios()));',
+    `create or replace function public.auditar() returns trigger language plpgsql security definer set search_path = public as $$
+declare equipo text;
+begin
+  if TG_OP = 'UPDATE' and (to_jsonb(new) - 'actualizado') = (to_jsonb(old) - 'actualizado') then return new; end if;
+  begin equipo := nullif(current_setting('request.headers', true), '')::json ->> 'x-equipo'; exception when others then equipo := null; end;
+  insert into public.auditoria (tabla, fila, accion, antes, despues, usuario, equipo)
+  values (TG_TABLE_NAME, case when TG_OP = 'DELETE' then old.id else new.id end, lower(TG_OP),
+    case when TG_OP <> 'INSERT' then to_jsonb(old) end, case when TG_OP <> 'DELETE' then to_jsonb(new) end, auth.uid(), equipo);
+  return coalesce(new, old);
+end $$;`,
     '')
 
   for (const t of orden) {
@@ -213,12 +271,14 @@ end $$;`,
     if (t.columnaAcceso) L.push(`create index if not exists ${t.nombre}_${t.columnaAcceso}_idx on public.${t.nombre} (${t.columnaAcceso});`)
     L.push(`drop trigger if exists marcar_actualizado on public.${t.nombre};`,
       `create trigger marcar_actualizado before update on public.${t.nombre} for each row execute function public.marcar_actualizado();`,
+      `drop trigger if exists auditar on public.${t.nombre};`,
+      ...(t.auditar ? [`create trigger auditar after insert or update or delete on public.${t.nombre} for each row execute function public.auditar();`] : []),
       `alter table public.${t.nombre} enable row level security;`,
       `alter table public.${t.nombre} replica identity full; -- el tiempo real envía la fila completa también al borrar`)
     for (const viejo of ['con sesion', 'leer', 'crear', 'cambiar', 'borrar', 'admin escribe', 'rol leer', 'rol crear', 'rol cambiar', 'rol borrar']) L.push(`drop policy if exists "${viejo}" on public.${t.nombre};`)
     const T = literal(t.nombre)
     const dentro = `((select public.alcance(${T})) = 'todo'${t.columnaAcceso ? ` or ((select public.alcance(${T})) = 'sede' and ${t.columnaAcceso} = (select public.mi_${t.columnaAcceso}()))` : ''} or ((select public.alcance(${T})) = 'propio' and creado_por = auth.uid()))`
-    const cond = (accion) => `(select public.puede(${T}, '${accion}')) and ${dentro}`
+    const cond = (accion) => `(select public.puede(${T}, '${accion}')) and ${dentro}${accion === 'leer' ? '' : ' and (select public.version_app_ok())'}`
     L.push(`create policy "rol leer" on public.${t.nombre} for select to authenticated using (${cond('leer')});`,
       `create policy "rol crear" on public.${t.nombre} for insert to authenticated with check (${cond('crear')});`,
       `create policy "rol cambiar" on public.${t.nombre} for update to authenticated using (${cond('cambiar')}) with check (${cond('cambiar')});`,
@@ -264,4 +324,78 @@ end $$;`,
     "-- update public.perfiles set rol = 'admin' where correo = 'admin@tuempresa.com';",
     '-- Después, los demás usuarios se crean desde la app (Usuarios y roles).')
   return { sql: L.join('\n') + '\n', tablas: orden.map((t) => t.nombre), columnasPerfil, roles: roles.map((r) => r.nombre) }
+}
+
+
+const existeColumna = (tabla, col) => `exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = ${literal(tabla)} and column_name = ${literal(col)})`
+const existeTabla = (tabla) => `exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = ${literal(tabla)})`
+
+/**
+ * Cambios que no se pueden expresar como "estado deseado" (renombrar, quitar, cambiar tipo). Cada uno es
+ * idempotente y, antes de borrar algo, deja una copia en una tabla respaldo_*.
+ * cambios: [{ tipo: 'renombrar-columna', tabla, de, a } · { tipo: 'renombrar-tabla', de, a } · { tipo: 'cambiar-tipo', tabla, columna, nuevoTipo }
+ *           · { tipo: 'quitar-columna', tabla, columna, confirmar: true } · { tipo: 'quitar-tabla', tabla, confirmar: true } · { tipo: 'sql', descripcion, sql }]
+ */
+export function sqlDeCambios(cambios, { fecha = new Date() } = {}) {
+  if (!Array.isArray(cambios) || !cambios.length) throw new Error('"cambios" debe ser una lista')
+  const sello = fecha.toISOString().slice(0, 10).replace(/-/g, '')
+  const L = [], resumen = []
+  for (const c of cambios) {
+    if (c.tipo === 'renombrar-columna') {
+      const tabla = nombreSql(c.tabla, 'La tabla'), de = nombreSql(c.de, 'La columna'), a = nombreSql(c.a, 'La columna nueva')
+      L.push(`do $$ begin if ${existeColumna(tabla, de)} and not ${existeColumna(tabla, a)} then execute 'alter table public.${tabla} rename column ${de} to ${a}'; end if; end $$;`)
+      resumen.push(`${tabla}: ${de} → ${a}`)
+    } else if (c.tipo === 'renombrar-tabla') {
+      const de = nombreSql(c.de, 'La tabla'), a = nombreSql(c.a, 'La tabla nueva')
+      if (PROPIAS.has(de) || PROPIAS.has(a)) throw new Error(`"${PROPIAS.has(de) ? de : a}" es del plugin y no se renombra`)
+      L.push(`do $$ begin if ${existeTabla(de)} and not ${existeTabla(a)} then execute 'alter table public.${de} rename to ${a}'; end if; end $$;`,
+        `update public.roles set permisos = (permisos - ${literal(de)}) || jsonb_build_object(${literal(a)}, permisos -> ${literal(de)}) where permisos ? ${literal(de)};`)
+      resumen.push(`tabla ${de} → ${a}`)
+    } else if (c.tipo === 'cambiar-tipo') {
+      const tabla = nombreSql(c.tabla, 'La tabla'), col = nombreSql(c.columna, 'La columna')
+      const tipo = TIPOS[c.nuevoTipo]
+      if (!tipo) throw new Error(`cambiar-tipo: "${c.nuevoTipo}" no existe (usa ${Object.keys(TIPOS).join(', ')})`)
+      L.push(`do $$ begin if ${existeColumna(tabla, col)} then execute 'alter table public.${tabla} alter column ${col} type ${tipo} using ${col}::${tipo}'; end if; end $$;`)
+      resumen.push(`${tabla}.${col} ahora es ${c.nuevoTipo}`)
+    } else if (c.tipo === 'quitar-columna') {
+      const tabla = nombreSql(c.tabla, 'La tabla'), col = nombreSql(c.columna, 'La columna')
+      if (c.confirmar !== true) throw new Error(`quitar ${tabla}.${col} borra datos: pásalo con "confirmar": true después de que el usuario lo apruebe`)
+      const resp = `respaldo_${tabla}_${col}_${sello}`.slice(0, 60)
+      L.push(`do $$ begin if ${existeColumna(tabla, col)} then execute 'create table if not exists public.${resp} as select id, ${col} from public.${tabla}'; execute 'alter table public.${resp} enable row level security'; execute 'alter table public.${tabla} drop column ${col}'; end if; end $$;`)
+      resumen.push(`quitada ${tabla}.${col} (copia en ${resp})`)
+    } else if (c.tipo === 'quitar-tabla') {
+      const tabla = nombreSql(c.tabla, 'La tabla')
+      if (PROPIAS.has(tabla)) throw new Error(`"${tabla}" es del plugin y no se quita`)
+      if (c.confirmar !== true) throw new Error(`quitar la tabla ${tabla} borra datos: pásalo con "confirmar": true después de que el usuario lo apruebe`)
+      const resp = `respaldo_${tabla}_${sello}`.slice(0, 60)
+      L.push(`do $$ begin if ${existeTabla(tabla)} and not ${existeTabla(resp)} then begin execute 'alter publication supabase_realtime drop table public.${tabla}'; exception when others then null; end; execute 'alter table public.${tabla} rename to ${resp}'; end if; end $$;`,
+        `update public.roles set permisos = permisos - ${literal(tabla)} where permisos ? ${literal(tabla)};`)
+      resumen.push(`quitada la tabla ${tabla} (queda como ${resp})`)
+    } else if (c.tipo === 'sql') {
+      if (!String(c.sql || '').trim()) throw new Error('cambio sql vacío')
+      L.push(`-- ${String(c.descripcion || 'cambio manual').replace(/\n/g, ' ')}`, String(c.sql).trim().replace(/;?\s*$/, ';'))
+      resumen.push(c.descripcion || 'cambio manual')
+    } else throw new Error(`tipo de cambio desconocido: ${c.tipo}`)
+  }
+  return { sql: L.join('\n') + '\n', resumen: resumen.join('; ') }
+}
+
+/** Envuelve una migración para que solo se aplique una vez y quede registrada en public.migraciones. */
+export function envolverMigracion(nombre, sql, resumen = '') {
+  const n = String(nombre).replace(/[^a-z0-9_-]/gi, '_')
+  const etiqueta = `m_${n.replace(/-/g, '_')}`.slice(0, 40)
+  if (sql.includes(`$${etiqueta}$`) || sql.includes(`$s_${etiqueta}$`)) throw new Error('la migración contiene su propia etiqueta')
+  return [
+    `-- Migración ${n}${resumen ? `: ${resumen}` : ''}`,
+    'create table if not exists public.migraciones (nombre text primary key, resumen text, aplicada timestamptz not null default now());',
+    `do $${etiqueta}$`,
+    'begin',
+    `  if exists (select 1 from public.migraciones where nombre = ${literal(n)}) then raise notice 'migración ${n} ya aplicada'; return; end if;`,
+    `  execute $s_${etiqueta}$`,
+    sql,
+    `  $s_${etiqueta}$;`,
+    `  insert into public.migraciones (nombre, resumen) values (${literal(n)}, ${literal(resumen)});`,
+    `end $${etiqueta}$;`,
+    '',
+  ].join('\n')
 }

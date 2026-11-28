@@ -5,416 +5,27 @@
 // instalador y deja GitHub Actions compilando Windows y Mac a la vez.
 // Además trae un motor de automatizaciones (robots de navegador, horarios, carpetas vigiladas,
 // cambios en Supabase en tiempo real) que corre dentro de la app aunque la ventana esté cerrada.
+//
+// Módulos: lib/base.js (versiones, package.json de la app), lib/github.js (Actions y página de descargas),
+// lib/textos.js (reglas para el modelo), lib/procesos.js (comandos), tablas.js (SQL de Supabase),
+// plantilla/ (la app Electron: main, preload, motor de automatizaciones), web/ (datos en vivo e interfaz).
 
-import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import vm from 'node:vm'
-import { ACCESOS, normalizarTablas, sqlDeTablas } from './tablas.js'
+import { createHash } from 'node:crypto'
+import { ACCESOS, envolverMigracion, normalizarTablas, sqlDeCambios, sqlDeTablas } from './tablas.js'
+import { AQUI, VERSIONES, DEFAULTS, slug, limpio, iniciales, validarAtajo, iconoSvg, paqueteApp } from './lib/base.js'
+import { flujoGithub, paginaDescargas } from './lib/github.js'
+import { PAGINA_INICIAL, LEEME, REGLAS } from './lib/textos.js'
+import { correr, finalDe, npm, npx, raizGit, repoGithub, detectarWeb, tamanoLegible } from './lib/procesos.js'
+
+export { slug, validarAtajo, iconoSvg, paqueteApp, flujoGithub, paginaDescargas }
 
 export const name = 'escritorio'
 export const inject = ['tools', 'workingDirectory', 'systemPrompt']
-
-const AQUI = path.dirname(fileURLToPath(import.meta.url))
-const VERSIONES = { electron: '45.5.0', builder: '26.18.0', updater: '6.8.11', playwright: '1.65.1', supabase: '2.119.2', ws: '8.23.0' }
-const DEFAULTS = { carpeta: 'escritorio', minutosInstalar: 20, minutosEmpaquetar: 30 }
-
-export const slug = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50)
-const limpio = (s, n = 60) => String(s ?? '').replace(/[\r\n"<>`\\]/g, '').trim().slice(0, n)
-const iniciales = (n) => (String(n).trim().split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]).join('') || 'A').toUpperCase()
-
-export function validarAtajo(a) {
-  if (!a) return null
-  const partes = String(a).split('+').map((p) => p.trim())
-  const mods = new Set(['CommandOrControl', 'CmdOrCtrl', 'Command', 'Cmd', 'Control', 'Ctrl', 'Alt', 'Option', 'AltGr', 'Shift', 'Super', 'Meta'])
-  if (partes.length < 2 || !partes.slice(0, -1).every((p) => mods.has(p)) || !/^([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Space|Up|Down|Left|Right)$/i.test(partes.at(-1))) {
-    throw new Error(`atajo inválido "${a}". Ejemplo: CommandOrControl+Shift+K`)
-  }
-  return partes.join('+')
-}
-
-export const iconoSvg = (nombre, color = '#0b63f6') => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <defs>
-    <linearGradient id="f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${color}"/><stop offset="1" stop-color="${color}" stop-opacity=".72"/></linearGradient>
-    <linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".34"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient>
-  </defs>
-  <rect x="80" y="80" width="864" height="864" rx="200" fill="#0d0d10"/>
-  <rect x="80" y="80" width="864" height="864" rx="200" fill="url(#f)"/>
-  <rect x="80" y="80" width="864" height="864" rx="200" fill="url(#b)"/>
-  <text x="512" y="512" dy=".35em" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Roboto, Arial, sans-serif" font-weight="700" font-size="${iniciales(nombre).length > 1 ? 380 : 460}" fill="#fff" letter-spacing="-12">${iniciales(nombre)}</text>
-</svg>
-`
-
-export function paqueteApp(o) {
-  return {
-    name: o.paquete,
-    productName: o.nombre,
-    version: o.version,
-    description: o.descripcion || o.nombre,
-    author: o.autor || o.nombre,
-    main: 'main.js',
-    private: true,
-    scripts: {
-      start: 'electron .',
-      web: 'node scripts/traer-web.cjs',
-      icono: 'electron scripts/icono.cjs',
-      'dist:win': 'electron-builder --win',
-      'dist:mac': 'electron-builder --mac',
-      'dist:linux': 'electron-builder --linux',
-    },
-    dependencies: { 'electron-updater': VERSIONES.updater, 'playwright-core': VERSIONES.playwright, '@supabase/supabase-js': VERSIONES.supabase, ws: VERSIONES.ws },
-    devDependencies: { electron: VERSIONES.electron, 'electron-builder': VERSIONES.builder },
-    build: {
-      appId: o.id,
-      productName: o.nombre,
-      directories: { output: 'instaladores', buildResources: 'build' },
-      files: ['main.js', 'preload.js', 'escritorio.config.json', 'app/**/*', 'motor/**/*', 'automatizaciones/**/*', 'build/icon.png', 'package.json'],
-      extraResources: [{ from: 'build/icon.png', to: 'icon.png' }],
-      artifactName: `${slug(o.nombre) || 'app'}-` + '${version}-${os}-${arch}.${ext}', // sin espacios: GitHub los cambia y rompería las actualizaciones
-      win: { target: [{ target: 'nsis', arch: ['x64'] }], icon: 'build/icon.png' },
-      nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, createDesktopShortcut: true, createStartMenuShortcut: true, shortcutName: o.nombre, uninstallDisplayName: o.nombre, language: '3082' },
-      mac: { target: [{ target: 'dmg', arch: ['universal'] }, { target: 'zip', arch: ['universal'] }], icon: 'build/icon.png', category: 'public.app-category.productivity', identity: null },
-      dmg: { title: o.nombre },
-      linux: { target: ['AppImage'], icon: 'build/icon.png', category: 'Office' },
-      ...(o.github ? { publish: [{ provider: 'github', owner: o.github.owner, repo: o.github.repo, releaseType: 'release' }] } : {}),
-    },
-  }
-}
-
-export function flujoGithub({ dirRel, webDirRel, nombre, paginaRel = null, sitio = null }) {
-  const enDir = dirRel === '.' ? '' : `\n        working-directory: ${dirRel}`
-  const sal = `${dirRel === '.' ? '' : `${dirRel}/`}instaladores`
-  return `# Compila ${nombre} para Windows, Mac y Linux en los servidores de GitHub (generado por dsh-escritorio).
-# Publicar una versión (las apps ya instaladas la descargan solas y se actualizan al cerrarse), de dos formas:
-# - Desde la web: pestaña Actions → Escritorio → Run workflow → escribe la versión (ej. 1.2.0).
-# - Con git: git tag escritorio-v1.2.0 && git push origin escritorio-v1.2.0
-# - O en Releases → "Draft a new release" con la etiqueta escritorio-v1.2.0 (los instaladores se suben solos).
-# "Run workflow" con la versión vacía solo compila (los instaladores quedan en esa ejecución).
-name: Escritorio
-
-on:
-  push:
-    tags: ['escritorio-v*']
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Versión a publicar, ej. 1.2.0 (mayor que la anterior). Vacío = solo compilar.'
-        required: false
-        default: ''
-      notas:
-        description: 'Novedades de esta versión (se ven en la página de descargas).'
-        required: false
-        default: ''
-
-env:
-  VERSION: \${{ startsWith(github.ref, 'refs/tags/escritorio-v') && github.ref_name || inputs.version }}
-
-permissions:
-  contents: write
-
-jobs:
-  compilar:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
-    runs-on: \${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-${webDirRel ? `      - name: Dependencias de la interfaz
-        run: npm install --no-audit --no-fund
-        working-directory: ${webDirRel}
-` : ''}      - name: Dependencias de la app${enDir}
-        run: npm install --no-audit --no-fund
-      - name: Interfaz${enDir}
-        run: npm run web
-      - name: Versión
-        if: env.VERSION != ''${enDir}
-        shell: bash
-        run: |
-          V="\${VERSION#escritorio-v}"
-          [[ "$V" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || { echo "::error::La versión debe ser como 1.2.0 (recibí '$V')"; exit 1; }
-          npm pkg set version="$V"
-      - name: Mac sin Spotlight (evita que el .dmg quede "ocupado")
-        if: runner.os == 'macOS'
-        run: sudo mdutil -a -i off
-      - name: Instaladores${enDir}
-        shell: bash
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: |
-          case "$RUNNER_OS" in Windows) P=--win;; macOS) P=--mac;; *) P=--linux;; esac
-          npx electron-builder $P --publish never
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${slug(nombre) || 'app'}-\${{ runner.os }}
-          path: |
-            ${sal}/*.exe
-            ${sal}/*.dmg
-            ${sal}/*.zip
-            ${sal}/*.AppImage
-            ${sal}/*.blockmap
-            ${sal}/latest*.yml
-          if-no-files-found: error
-
-  publicar:
-    # Solo con versión, y solo si las tres compilaciones salieron bien: así nunca queda una versión a medias.
-    needs: compilar
-    if: startsWith(github.ref, 'refs/tags/escritorio-v') || inputs.version != ''
-    runs-on: ubuntu-latest
-${sitio ? `    env:
-      TIENE_NETLIFY: \${{ secrets.NETLIFY_AUTH_TOKEN != '' }}
-` : ''}    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: salida
-          merge-multiple: true
-      - name: Nombres fijos para la página de descargas (siempre la última versión)
-        run: |
-          cd salida
-          for f in *.exe; do [ "\${f%.blockmap}" = "$f" ] && cp "$f" "${slug(nombre) || 'app'}-windows.exe"; done
-          for f in *.dmg; do cp "$f" "${slug(nombre) || 'app'}-mac.dmg"; done
-          for f in *.AppImage; do cp "$f" "${slug(nombre) || 'app'}-linux.AppImage"; done
-          ls -la
-      - name: Versión en Releases
-        env:
-          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ls -la salida
-          V="\${VERSION#escritorio-v}"
-          T="escritorio-v$V"
-          NOTAS="Instaladores de ${nombre} $V. Windows: .exe · Mac: .dmg · Linux: .AppImage. Las apps ya instaladas se actualizan solas."
-          if gh release view "$T" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            # La versión se creó a mano en Releases: se le suben los instaladores.
-            gh release upload "$T" salida/* --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$T" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
-          else
-            gh release create "$T" salida/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "${nombre} $V" --latest --notes "$NOTAS"
-          fi
-${sitio ? `      - uses: actions/checkout@v4
-        with:
-          path: repo
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Sitio de descargas del cliente (${sitio})
-        env:
-          NOTAS: \${{ inputs.notas }}
-        run: node repo/${dirRel === '.' ? '' : `${dirRel}/`}scripts/armar-sitio.cjs --desde salida --salida sitio --notas "$NOTAS"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sitio-de-descargas
-          path: sitio
-      - name: Publicar en Netlify (si el repo tiene NETLIFY_AUTH_TOKEN y NETLIFY_SITE_ID)
-        env:
-          NETLIFY_AUTH_TOKEN: \${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: \${{ secrets.NETLIFY_SITE_ID }}
-        if: env.TIENE_NETLIFY == 'true'
-        run: npx --yes netlify-cli@17 deploy --dir sitio --prod --site "$NETLIFY_SITE_ID"
-` : ''}${paginaRel ? `
-  pagina:
-    # Página pública de descargas en GitHub Pages (actívala una vez: Settings → Pages → Source: GitHub Actions).
-    needs: publicar
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: \${{ steps.despliegue.outputs.page_url }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: ${paginaRel}
-      - id: despliegue
-        uses: actions/deploy-pages@v4
-` : ''}`
-}
-
-/** Página pública de descargas: detecta el sistema y apunta siempre a la última versión publicada. */
-export function paginaDescargas({ nombre, owner, repo, color = '#0a66ff', descripcion = '' }) {
-  const s = slug(nombre) || 'app'
-  const base = `https://github.com/${owner}/${repo}/releases/latest/download`
-  const e = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
-  return `<!DOCTYPE html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Descargar ${e(nombre)}</title>
-<meta name="description" content="Descarga ${e(nombre)} para Windows y Mac. Se actualiza sola.">
-<link rel="icon" href="icono.png">
-<style>
-:root{--fondo:#f5f5f7;--sup:#fff;--tinta:#1d1d1f;--suave:#6e6e73;--borde:rgba(0,0,0,.08);--acento:${e(color)};color-scheme:light dark}
-@media (prefers-color-scheme:dark){:root{--fondo:#000;--sup:#1c1c1e;--tinta:#f5f5f7;--suave:#98989d;--borde:rgba(255,255,255,.1)}}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--fondo);color:var(--tinta);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
-main{width:min(720px,calc(100% - 32px));margin:0 auto;padding:72px 0 48px;text-align:center}
-.icono{width:96px;height:96px;border-radius:24px;box-shadow:0 12px 40px rgba(0,0,0,.18);margin:0 auto 22px;display:block;background:var(--acento)}
-h1{font-size:clamp(34px,6vw,52px);letter-spacing:-.03em;margin:0 0 8px;line-height:1.05}
-.sub{color:var(--suave);font-size:19px;margin:0 auto 30px;max-width:520px}
-.principal{display:inline-flex;align-items:center;gap:10px;background:var(--acento);color:#fff;text-decoration:none;font-weight:650;font-size:17px;padding:15px 28px;border-radius:999px;box-shadow:0 8px 24px color-mix(in srgb,var(--acento) 35%,transparent);transition:transform .15s,filter .15s}
-.principal:hover{filter:brightness(1.07);transform:translateY(-1px)}.principal:active{transform:scale(.98)}
-.version{color:var(--suave);font-size:14px;margin-top:14px;min-height:21px}
-.otros{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:44px 0 0;text-align:left}
-.otro{background:var(--sup);border:1px solid var(--borde);border-radius:18px;padding:18px;text-decoration:none;color:inherit;transition:border-color .15s}
-.otro:hover{border-color:var(--acento)}.otro b{display:block;font-size:16px}.otro span{color:var(--suave);font-size:14px}
-.ayuda{background:var(--sup);border:1px solid var(--borde);border-radius:18px;padding:20px 22px;margin-top:28px;text-align:left;font-size:14.5px;color:var(--suave)}
-.ayuda b{color:var(--tinta)}.ayuda p{margin:6px 0}
-footer{color:var(--suave);font-size:13px;margin-top:36px}footer a{color:var(--suave)}
-</style></head><body><main>
-<img class="icono" src="icono.png" alt="" onerror="this.removeAttribute('src')">
-<h1>${e(nombre)}</h1>
-<p class="sub">${e(descripcion || 'La app de escritorio. Instálala una vez y se actualiza sola.')}</p>
-<a class="principal" id="principal" href="${base}/${s}-windows.exe">Descargar para Windows</a>
-<div class="version" id="version"></div>
-<div class="otros">
-  <a class="otro" href="${base}/${s}-windows.exe"><b>Windows</b><span>Windows 10 y 11 · .exe</span></a>
-  <a class="otro" href="${base}/${s}-mac.dmg"><b>Mac</b><span>Intel y Apple (M1–M4) · .dmg</span></a>
-  <a class="otro" href="${base}/${s}-linux.AppImage"><b>Linux</b><span>.AppImage</span></a>
-</div>
-<div class="ayuda">
-  <p><b>Windows:</b> si aparece "Windows protegió su PC", toca <b>Más información → Ejecutar de todos modos</b>. Pasa solo la primera vez.</p>
-  <p><b>Mac:</b> la primera vez abre la app con clic derecho → <b>Abrir</b>.</p>
-  <p><b>Actualizaciones:</b> la app busca versiones nuevas sola y se actualiza al cerrarla. No tienes que volver a esta página.</p>
-</div>
-<footer><a href="https://github.com/${owner}/${repo}/releases">Todas las versiones</a></footer>
-</main>
-<script>
-(function(){
-  var ua = navigator.userAgent, base = ${JSON.stringify(base)}, s = ${JSON.stringify(s)}
-  var so = /Mac|iPhone|iPad/.test(ua) ? 'mac' : /Linux/.test(ua) && !/Android/.test(ua) ? 'linux' : 'windows'
-  var b = document.getElementById('principal')
-  b.href = base + '/' + s + (so === 'mac' ? '-mac.dmg' : so === 'linux' ? '-linux.AppImage' : '-windows.exe')
-  b.textContent = 'Descargar para ' + (so === 'mac' ? 'Mac' : so === 'linux' ? 'Linux' : 'Windows')
-  fetch('https://api.github.com/repos/${owner}/${repo}/releases/latest').then(function(r){ return r.ok ? r.json() : null }).then(function(v){
-    if (!v) return
-    var f = new Date(v.published_at).toLocaleDateString('es', { day: 'numeric', month: 'long', year: 'numeric' })
-    document.getElementById('version').textContent = 'Versión ' + String(v.tag_name).replace(/^escritorio-v/, '') + ' · ' + f
-  }).catch(function(){})
-})()
-</script>
-</body></html>
-`
-}
-
-const PAGINA_INICIAL = (o) => `<!DOCTYPE html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${o.nombre}</title>
-<style>
-:root{--fondo:#f5f5f7;--sup:#fff;--tinta:#1d1d1f;--suave:#515154;--borde:rgba(0,0,0,.09);--acento:${o.color};color-scheme:light}
-@media (prefers-color-scheme:dark){:root{--fondo:#000;--sup:#161618;--tinta:#f5f5f7;--suave:#c7c7cc;--borde:rgba(255,255,255,.1);color-scheme:dark}}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--fondo);color:var(--tinta);font:16px/1.5 -apple-system,"Segoe UI",system-ui,sans-serif}
-main{width:min(560px,calc(100% - 32px));background:var(--sup);border:1px solid var(--borde);border-radius:22px;padding:32px;display:grid;gap:16px;box-shadow:0 10px 40px rgba(0,0,0,.08)}
-h1{margin:0;font-size:28px;letter-spacing:-.02em}p{margin:0;color:var(--suave)}
-.fila{display:flex;flex-wrap:wrap;gap:10px}button{font:600 15px inherit;font-family:inherit;border:0;border-radius:999px;padding:11px 18px;cursor:pointer;background:var(--acento);color:#fff}
-button.sec{background:transparent;color:var(--acento);box-shadow:inset 0 0 0 1px var(--acento)}
-pre{margin:0;background:var(--fondo);border-radius:12px;padding:12px;font:13px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;color:var(--suave);min-height:48px}
-</style></head><body><main>
-<h1>${o.nombre}</h1><p>App de escritorio lista. Reemplaza esta página por tu interfaz (carpeta app/) o conecta tu proyecto web.</p>
-<div class="fila"><button id="abrir">Abrir un archivo</button><button class="sec" id="guardar">Guardar una nota</button><button class="sec" id="avisar">Notificación</button></div>
-<pre id="salida">${o.nombre} · listo</pre>
-</main><script>
-const s=document.getElementById('salida'),e=window.escritorio;
-if(!e){s.textContent='Abierto en el navegador: las funciones de escritorio solo existen dentro de la app.'}
-else{e.info().then(i=>s.textContent=i.nombre+' '+i.version+' · '+i.plataforma);
-document.getElementById('abrir').onclick=async()=>{const r=await e.archivos.abrir({filtros:[{name:'Texto',extensions:['txt','csv','json','md']}]});if(r)s.textContent=r[0].nombre+'\\n'+(r[0].texto||'').slice(0,400)};
-document.getElementById('guardar').onclick=async()=>{const r=await e.archivos.guardar({nombre:'nota.txt',contenido:'Guardado desde ${o.nombre}: '+new Date().toLocaleString()});if(r)s.textContent='Guardado en '+r.ruta};
-document.getElementById('avisar').onclick=()=>e.notificar('${o.nombre}','Las notificaciones funcionan.');}
-</script></body></html>
-`
-
-const LEEME = (o) => `# ${o.nombre} — app de escritorio
-
-Generada con dsh-escritorio (Electron ${VERSIONES.electron}).
-
-| Comando (en esta carpeta) | Qué hace |
-|---|---|
-| \`npm install\` | Una sola vez: descarga Electron y las herramientas. |
-| \`npm run web\` | ${o.web ? `Compila la interfaz de \`${o.web.carpeta}\` y la copia a \`app/\`.` : 'Nada: la interfaz ya está en `app/`.'} |
-| \`npm start\` | Abre la app para probarla. |
-| \`npm run dist:win\` / \`dist:mac\` | Crea el instalador en \`instaladores/\`. |
-
-- Ajustes (nombre, tamaño, bandeja, atajo): \`escritorio.config.json\`. Ícono: \`build/icono.svg\` → \`npm run icono\`.
-- Desde la interfaz: \`window.escritorio.archivos.abrir()\`, \`.guardar()\`, \`window.escritorio.notificar()\` (solo dentro de la app; en el navegador no existe).
-- Windows muestra "Windows protegió tu PC" la primera vez porque el instalador no está firmado: "Más información" → "Ejecutar de todas formas". En Mac: clic derecho → Abrir. Para quitar esos avisos hace falta firmar (certificado de Windows / cuenta de desarrollador de Apple).
-`
-
-const REGLAS = [
-  '## Escritorio (dsh-escritorio)',
-  'When the user wants a desktop app (Windows/Mac installer, tray icon, global shortcut, access to local files, "que se instale en el PC"), use the dsh-escritorio tools instead of hand-writing Electron code:',
-  '1. escritorio_crear wraps the project UI (Vite/React build, a static folder, a deployed URL, or a new starter page). For Vite it builds with base "./" automatically.',
-  '2. In the UI, desktop features go through window.escritorio (archivos.abrir/guardar/mostrar, notificar, abrirEnNavegador, info, iniciarConSistema); always guard with `if (window.escritorio)` so the web version keeps working, with a browser fallback (download/upload).',
-  '3. Always run escritorio_probar after creating or changing it: it really opens the app, checks errors, the bridge, tray and shortcut, and returns light/dark screenshots. Look at them and fix problems before saying it works.',
-  '4. escritorio_empaquetar builds the installer for this computer. For Windows and Mac together and auto-updates, escritorio_publicar writes the GitHub Actions workflow; never push, tag or publish without the user\'s explicit approval.',
-  '5. Be honest about signing: unsigned installers show a warning the first time on Windows (SmartScreen) and Mac (Gatekeeper).',
-  '',
-  '### Automations inside the desktop app',
-  'The app has an automation engine that keeps running while the window is closed (tray). Each automation is escritorio/automatizaciones/<id>.js; create them with escritorio_automatizacion (it validates the trigger and code), then ALWAYS run escritorio_probar with soloAutomatizaciones:[id] and read the result, logs and robot screenshots before saying it works.',
-  'Triggers ("cuando", one or a list): {cron:"0 18 * * 1-5"} (local time) · {cada:"15m", ya?:true} · {carpeta:"~/Documents/Entrada", archivos:"*.csv|*.xlsx"} · {tabla:"pagos", evento:"INSERT"|"UPDATE"|"DELETE"|"*", filtro?:"sede=eq.Norte"} (Supabase realtime) · {alIniciar:true} · {manual:true}. Options: tiempoMaximo ("10m" default), reintentos (backoff 30 s, 1 min…), ponerseAlDia (run once if the PC was off at the cron time), avisarError (default true), avisarExito, enPrueba:false (skip in tests, e.g. it sends real messages).',
-  'ctx in ejecutar(ctx): disparo {tipo, datos, archivo, fila, anterior, hora} · config (= "variables" in escritorio.config.json) · registro(...) · progreso(%, texto) · notificar(titulo, cuerpo) · interfaz(evento, datos) → UI gets it via window.escritorio.automatizaciones.alEvento · ejecutar(otroId, datos) chains another automation · pausa("2s") · cancelado() · archivos {ruta, existe, leer(p,"texto"|"json"|"bytes"), escribir, agregar, listar(dir, patron), mover, copiar, crearCarpeta, csv(filas), leerCsv(texto), carpetaApp} (~ = user home) · estado {leer(k, def), guardar(k, v)} persisted per automation · db = Supabase client (needs escritorio_datos) · http = fetch.',
-  'Robots: const p = await robot({ sesion?: "nombre", visible?: false, espera?: 30000 }) returns a Playwright Page using the browser already on the PC (Edge on Windows, Chrome on Mac/Linux; nothing to download). Use role/label locators (getByRole, getByLabel, getByText), never brittle CSS chains; wait for content before reading. p.descargar(() => click) saves a download and returns its path; p.captura("nombre") saves a screenshot shown in the panel. Errors automatically save a screenshot of every open page. A named sesion keeps cookies/logins between runs: prefer a one-time visible login (robot({sesion, visible:true}) and wait for the logged-in page) over storing passwords; if credentials are unavoidable put them in "variables", never in code, and tell the user they live inside the installed app.',
-  'Each run happens in a separate process with a time limit, so a stuck robot never freezes the app. History (result, logs, screenshots) lives in the panel: tray → Automatizaciones, or window.escritorio.automatizaciones.abrirPanel(). From the UI: automatizaciones.lista/ejecutar(id, datos)/activar(id, bool)/cancelar/historial/alCambiar.',
-  '',
-  '### Real-time data for several PCs',
-  'For an app used on several computers with live shared data, use escritorio_datos with Supabase (url + public anon/publishable key only; it refuses service_role/secret keys). Pass "tablas" so it generates supabase/escritorio.sql: tables with id/creado_por/creado/actualizado, row-level security by "acceso" (autenticados · propietario · por-columna, e.g. each PC/sede sees only its rows · solo-lectura), a perfiles table with rol admin/usuario and the access column, and realtime enabled. With aplicar:true and SUPABASE_ACCESS_TOKEN on the PC it runs the SQL; otherwise tell the user to paste it in the SQL Editor, create one user per person/PC, and set the admin and each user\'s sede with the commented lines.',
-  'Users and roles: pass "roles" to escritorio_datos (admin always exists). Each role has permisos per table {acciones: leer/crear/cambiar/borrar, alcance: todo | sede | propio}, automatizaciones it may run (ids or "*") and gestionaUsuarios. Permissions are data: the admin edits them later from the app. Users are created INSIDE the app with <admin-usuarios> through the server function supabase/functions/gestionar-usuarios (deploy it; the secret key stays in Supabase). Only the first admin is created in the Supabase dashboard.',
-  'Client download page: when the app is for a client (they have a website, not a repository), call escritorio_sitio with the page URL (their domain or a host like Netlify) BEFORE the first installer is delivered. Default modo aviso: the app notifies of a new version and opens that page; nothing installs by itself. Each release: escritorio_empaquetar { version, notas }, then upload the whole escritorio/sitio/ folder to that host. For Windows+Mac at once, escritorio_publicar builds on GitHub Actions and leaves the artifact sitio-de-descargas (or deploys to Netlify with NETLIFY_AUTH_TOKEN/NETLIFY_SITE_ID secrets).',
-  'Automations with several PCs: once Supabase is connected, automations only run for a logged-in user whose role allows them; scheduled ones (cron/cada) and table triggers run on ONE PC per turn (shared turn table); set unaVez:false when each PC must run it (local backups), and correEn:{ sede:"Norte" } / { rol:"admin" } / { equipo:"CAJA-1" } to pin where it runs. Every run is logged to automatizacion_corridas (Actividad tab).',
-  'In the UI: import src/lib/datos.js once; wrap the whole app in <acceso-escritorio> (login screen until there is a session), put <estado-conexion> and <usuario-escritorio> in the top bar, read with datos.enVivo(tabla, {filtro, orden}, setFilas) and write with datos.guardar/borrar (queued while offline). Never put a Postgres connection string (Neon, Supabase DB password) inside an installed app: anyone can extract it; use Supabase with RLS, or an API server in between.',
-].join('\n')
-
-// ---------- procesos ----------
-
-function correr(cmd, args, { cwd, timeoutMs, signal, env } = {}) {
-  return new Promise((resolve) => {
-    let salida = ''
-    let h
-    try {
-      h = spawn(cmd, args, { cwd, signal, windowsHide: true, shell: process.platform === 'win32', env: { ...process.env, ...env } })
-    } catch (e) { return resolve({ codigo: null, salida: String(e.message) }) }
-    const t = setTimeout(() => h.kill(), timeoutMs ?? 10 * 60_000)
-    const mas = (b) => { salida += b.toString('utf8'); if (salida.length > 200_000) salida = salida.slice(-100_000) }
-    h.stdout?.on('data', mas); h.stderr?.on('data', mas)
-    h.on('error', (e) => { clearTimeout(t); resolve({ codigo: null, salida: salida + String(e.message) }) })
-    h.on('close', (codigo) => { clearTimeout(t); resolve({ codigo, salida }) })
-  })
-}
-const finalDe = (t, n = 3000) => (t.length > n ? '…' + t.slice(-n) : t)
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx'
-
-async function raizGit(desde) {
-  let d = desde
-  for (let i = 0; i < 12; i++) { if (existsSync(path.join(d, '.git'))) return d; const p = path.dirname(d); if (p === d) break; d = p }
-  return null
-}
-
-async function repoGithub(raiz) {
-  try {
-    const cfg = await readFile(path.join(raiz, '.git', 'config'), 'utf8')
-    const m = /url\s*=\s*.*github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\s*$/m.exec(cfg)
-    return m ? { owner: m[1], repo: m[2] } : null
-  } catch { return null }
-}
-
-async function detectarWeb(cwd) {
-  try {
-    const pkg = JSON.parse(await readFile(path.join(cwd, 'package.json'), 'utf8'))
-    const deps = { ...pkg.dependencies, ...pkg.devDependencies }
-    if (deps.vite && pkg.scripts?.build) return { tipo: 'vite', comando: 'npm run build -- --base=./', salida: 'dist' }
-    if (pkg.scripts?.build) return { tipo: 'build', comando: 'npm run build', salida: existsSync(path.join(cwd, 'build')) ? 'build' : 'dist' }
-  } catch {}
-  return null
-}
-
-async function tamanoLegible(f) { const s = await stat(f); return s.size > 1e6 ? `${(s.size / 1e6).toFixed(1)} MB` : `${Math.round(s.size / 1e3)} KB` }
-
-// ---------- plugin ----------
 
 export function apply(ctx, rawConfig) {
   const cfg = { ...DEFAULTS, ...(rawConfig ?? {}) }
@@ -573,6 +184,7 @@ export function apply(ctx, rawConfig) {
       properties: {
         carpeta: { type: 'string' },
         soloAutomatizaciones: { type: 'array', items: { type: 'string' }, description: 'Ids de automatizaciones a ejecutar en la prueba (por defecto todas menos las que digan enPrueba: false). ["ninguna"] para no ejecutar ninguna.' },
+        secretos: { type: 'object', description: 'Valores de prueba para los datos privados, ej. { "descargar-pagos.clave": "demo123" }. Solo para esta prueba: no se guardan.' },
       },
     },
     output: salida,
@@ -589,7 +201,7 @@ export function apply(ctx, rawConfig) {
       } catch (e) { return `❌ ${e.message}` }
       const carpetaPrueba = path.join(dir, '.prueba')
       const solo = Array.isArray(args?.soloAutomatizaciones) ? args.soloAutomatizaciones.map(String) : []
-      const r = await correrElectron(dir, ['.'], exec.signal, conAutos ? 330_000 : 120_000, { DSH_ESCRITORIO_PRUEBA: carpetaPrueba, DSH_ESCRITORIO_PRUEBA_AUTOS: solo.join(',') })
+      const r = await correrElectron(dir, ['.'], exec.signal, conAutos ? 330_000 : 120_000, { DSH_ESCRITORIO_PRUEBA: carpetaPrueba, DSH_ESCRITORIO_PRUEBA_AUTOS: solo.join(','), ...(args?.secretos ? { DSH_ESCRITORIO_SECRETOS: JSON.stringify(args.secretos) } : {}) })
       let res = null
       try { res = JSON.parse(await readFile(path.join(carpetaPrueba, 'resultado.json'), 'utf8')) } catch {}
       if (!res) return `${pasos.join('\n')}\n❌ La app no arrancó:\n${finalDe(r.salida, 2500)}`
@@ -629,6 +241,7 @@ export function apply(ctx, rawConfig) {
         tiempoMaximo: { type: 'string', description: 'Ej. "5m" (por defecto 10m).' },
         correEn: { type: 'object', description: 'Con varios equipos: dónde se activan sus horarios/vigilantes, ej. { "sede": "Norte" }, { "rol": "admin" }, { "equipo": "CAJA-1" }.' },
         unaVez: { type: 'boolean', description: 'Con varios equipos, false para que una tarea programada corra en CADA equipo (por defecto corre en uno solo por turno).' },
+        secretos: { type: 'array', items: { type: 'object', properties: { nombre: { type: 'string' }, etiqueta: { type: 'string' }, tipo: { type: 'string', enum: ['clave', 'texto'] } }, required: ['nombre'] }, description: 'Datos privados que cada equipo guarda cifrados desde el panel (usuario y clave de una plataforma…). En el código: await secreto("clave"). Nunca pongas claves en "variables" ni en el código.' },
         reintentos: { type: 'number' },
         ponerseAlDia: { type: 'boolean', description: 'Con cron: si el PC estaba apagado a la hora, corre una vez al abrir.' },
         avisarExito: { type: 'boolean' },
@@ -649,12 +262,12 @@ export function apply(ctx, rawConfig) {
       let lista, avisos
       try { ({ lista, avisos } = validarCuando(args.cuando, conf)) } catch (e) { return `❌ Disparador inválido: ${e.message}` }
       const codigo = String(args.codigo || '')
-      const variablesCtx = 'disparo, config, registro, progreso, notificar, interfaz, ejecutar, pausa, cancelado, archivos, estado, robot, db, http'
+      const variablesCtx = 'disparo, config, registro, progreso, notificar, interfaz, ejecutar, pausa, cancelado, archivos, estado, robot, db, http, secreto'
       try { new vm.Script(`(async function ejecutar({ ${variablesCtx} }) {\n${codigo}\n})`, { filename: `${id}.js` }) } catch (e) { return `❌ El código no compila: ${e.message}` }
       const archivo = path.join(dir, 'automatizaciones', `${id}.js`)
       if (existsSync(archivo) && !args.reemplazar) return `Ya existe automatizaciones/${id}.js. Pasa reemplazar: true para sobrescribirla, o usa otro id.`
       const opciones = {}
-      for (const k of ['tiempoMaximo', 'reintentos', 'ponerseAlDia', 'avisarExito', 'avisarError', 'enPrueba', 'correEn', 'unaVez']) if (args[k] !== undefined) opciones[k] = args[k]
+      for (const k of ['tiempoMaximo', 'reintentos', 'ponerseAlDia', 'avisarExito', 'avisarError', 'enPrueba', 'correEn', 'unaVez', 'secretos']) if (args[k] !== undefined) opciones[k] = args[k]
       if (opciones.tiempoMaximo) { try { duracion(opciones.tiempoMaximo) } catch (e) { return `❌ ${e.message}` } }
       const js = (v) => JSON.stringify(v, null, 2).replace(/\n/g, '\n  ')
       const sangrado = codigo.split('\n').map((l) => (l.trim() ? `    ${l}` : '')).join('\n')
@@ -686,7 +299,8 @@ export function apply(ctx, rawConfig) {
         `✅ ${rel}/automatizaciones/${id}.js — "${args.nombre}"`,
         ...(mejora ? [mejora] : []),
         ...avisos.map((a) => `⚠ ${a}`),
-        ...(usaRobot && /\b(clave|password|contrase)/i.test(codigo + JSON.stringify(args.variables || {})) ? ['⚠ Usa credenciales: quedan dentro de la app instalada. Si se puede, cambia a una sesión con nombre e inicio de sesión manual la primera vez (robot({ sesion, visible: true })).'] : []),
+        ...(/\b(clave|password|contrase|token)/i.test(JSON.stringify(args.variables || {})) ? ['⚠ Hay algo que parece una clave en "variables": eso queda dentro del instalador. Muévelo a "secretos" y léelo con await secreto("nombre"); cada equipo lo guarda cifrado en el panel.'] : []),
+        ...(args.secretos?.length ? [`Datos privados por equipo: ${args.secretos.map((s) => s.nombre).join(', ')}. En la prueba pásalos con escritorio_probar { secretos: { "${id}.${args.secretos[0].nombre}": "valor de prueba" } }; en cada PC se guardan en el panel → ${args.nombre} → Datos privados.`] : []),
         `Ahora pruébala: escritorio_probar { soloAutomatizaciones: ["${id}"] }. Revisa resultado, registro y pantallas del robot antes de decir que funciona.`,
       ].join('\n')
     },
@@ -740,6 +354,12 @@ export function apply(ctx, rawConfig) {
           },
         },
         valores: { type: 'object', description: 'Opciones fijas de los campos del perfil para la pantalla de usuarios, ej. { "sede": ["Norte", "Sur"] }.' },
+        cambios: {
+          type: 'array',
+          description: 'Cambios que no son "agregar": renombrar o quitar columnas/tablas, cambiar tipos. Van en su propia migración ANTES del estado de las tablas. Quitar exige confirmar:true (deja copia en respaldo_*). Pasa en "tablas" ya el estado nuevo (con los nombres nuevos).',
+          items: { type: 'object', required: ['tipo'], properties: { tipo: { type: 'string', enum: ['renombrar-columna', 'renombrar-tabla', 'cambiar-tipo', 'quitar-columna', 'quitar-tabla', 'sql'] }, tabla: { type: 'string' }, columna: { type: 'string' }, de: { type: 'string' }, a: { type: 'string' }, nuevoTipo: { type: 'string' }, confirmar: { type: 'boolean' }, descripcion: { type: 'string' }, sql: { type: 'string' } } },
+        },
+        copias: { type: 'boolean', description: 'false para no crear la automatización de copia de seguridad diaria de la base (por defecto se crea).' },
         aplicar: { type: 'boolean', description: 'true para ejecutar el SQL y publicar la función de usuarios en Supabase ahora (necesita la variable SUPABASE_ACCESS_TOKEN en el PC). Si no, quedan los archivos para pegarlos.' },
         titulo: { type: 'string', description: 'Título de la pantalla de inicio de sesión (por defecto el nombre de la app).' },
         registro: { type: 'boolean', description: 'true para permitir que la gente cree su propia cuenta (por defecto solo entra quien el admin crea).' },
@@ -765,6 +385,8 @@ export function apply(ctx, rawConfig) {
 
       let sql = null
       if (args.roles && !args.tablas) return '❌ Para definir roles pasa también "tablas" (los permisos se dan sobre ellas).'
+      let sqlCambios = null
+      if (args.cambios) { try { sqlCambios = sqlDeCambios(args.cambios) } catch (e) { return `❌ Cambios: ${e.message}` } }
       let tablasNorm = null
       if (args.tablas) { try { sql = sqlDeTablas(args.tablas, { roles: args.roles }); tablasNorm = normalizarTablas(args.tablas) } catch (e) { return `❌ ${args.roles ? 'Tablas o roles' : 'Tablas'}: ${e.message}` } }
 
@@ -814,28 +436,64 @@ export function apply(ctx, rawConfig) {
         }
       } else pasos.push('La interfaz no es un proyecto web compilado: los archivos de datos y de inicio de sesión no se copiaron.')
 
-      if (sql) {
-        const archivoSql = path.join(cwd, 'supabase', 'escritorio.sql')
-        await mkdir(path.dirname(archivoSql), { recursive: true })
-        await writeFile(archivoSql, sql.sql)
+      if (sql || sqlCambios) {
+        // ---- migraciones numeradas: cada una se aplica una sola vez y queda en public.migraciones ----
+        const dirMig = path.join(cwd, 'supabase', 'migraciones')
+        await mkdir(dirMig, { recursive: true })
+        const existentes = (await readdir(dirMig)).filter((n) => /^\d{3}_[\w-]+\.sql$/.test(n)).sort()
+        let siguiente = existentes.length ? Number(existentes.at(-1).slice(0, 3)) + 1 : 1
+        const nuevas = []
+        const nombreMig = (desc) => `${String(siguiente++).padStart(3, '0')}_${desc}`
+        if (sqlCambios) {
+          const n = nombreMig('cambios')
+          await writeFile(path.join(dirMig, `${n}.sql`), envolverMigracion(n, sqlCambios.sql, sqlCambios.resumen))
+          nuevas.push(`${n}.sql (${sqlCambios.resumen})`)
+        }
+        if (sql) {
+          const huella = createHash('sha256').update(sql.sql).digest('hex').slice(0, 16)
+          let ultimaHuella = null
+          for (const n of [...existentes].reverse()) { const c = await readFile(path.join(dirMig, n), 'utf8'); const m = c.match(/^-- huella: (\w+)/m); if (m) { ultimaHuella = m[1]; break } }
+          if (huella !== ultimaHuella) {
+            const n = nombreMig(existentes.length || sqlCambios ? 'tablas' : 'inicio')
+            const resumen = `tablas ${sql.tablas.join(', ')}; roles ${sql.roles.join(', ')}`
+            await writeFile(path.join(dirMig, `${n}.sql`), `-- huella: ${huella}\n${envolverMigracion(n, sql.sql, resumen)}`)
+            nuevas.push(`${n}.sql (${resumen})`)
+          }
+        }
+        const todas = (await readdir(dirMig)).filter((n) => /^\d{3}_[\w-]+\.sql$/.test(n)).sort()
+        const archivoSql = path.join(cwd, 'supabase', 'aplicar-todo.sql')
+        await writeFile(archivoSql, ['-- Todas las migraciones en orden (generado por dsh-escritorio). Pégalo completo en Supabase → SQL Editor → Run:', '-- las ya aplicadas se saltan solas, así que siempre se puede correr entero.', '', ...(await Promise.all(todas.map((n) => readFile(path.join(dirMig, n), 'utf8'))))].join('\n'))
         const relSql = path.relative(cwd, archivoSql).split(path.sep).join('/')
-        pasos.push(`✅ ${relSql}: ${sql.tablas.join(', ')} + perfiles (rol admin/usuario${sql.columnasPerfil.length ? `, ${sql.columnasPerfil.join(', ')}` : ''}), permisos por fila y tiempo real.`)
-        const archivoFuncion = path.join(cwd, 'supabase', 'functions', 'gestionar-usuarios', 'index.ts')
-        await mkdir(path.dirname(archivoFuncion), { recursive: true })
-        await cp(path.join(AQUI, 'web', 'funcion-usuarios.ts'), archivoFuncion)
-        const relFuncion = path.relative(cwd, archivoFuncion).split(path.sep).join('/')
-        pasos.push(`✅ ${relFuncion}: función del servidor que crea y administra usuarios (la clave secreta queda solo en Supabase). Roles: ${sql.roles.join(', ')}.`)
+        pasos.push(nuevas.length ? `✅ Migraciones nuevas en supabase/migraciones/: ${nuevas.join(' · ')}.` : '✅ Las tablas no cambiaron: no hace falta migración nueva.')
+        pasos.push(`✅ ${relSql}: todas las migraciones (${todas.length}) en orden, para pegar de una vez.`)
+        if (sql && args.copias !== false && existsSync(path.join(dir, 'automatizaciones')) === false) await mkdir(path.join(dir, 'automatizaciones'), { recursive: true })
+        if (sql && args.copias !== false && !existsSync(path.join(dir, 'automatizaciones', 'copia-de-seguridad.js'))) {
+          await writeFile(path.join(dir, 'automatizaciones', 'copia-de-seguridad.js'), automatizacionCopias(conf.nombre || 'App', [...sql.tablas, 'perfiles', 'roles', 'app_config']))
+          pasos.push(`✅ ${rel}/automatizaciones/copia-de-seguridad.js: cada día a las 8 pm el equipo del administrador guarda todas las tablas en Documentos/${conf.nombre || 'App'}/Copias (JSON y CSV, últimas 30).`)
+          await asegurarMotor(dir).catch(() => {})
+        }
+        let archivoFuncion = null, relFuncion = null
+        if (sql) {
+          archivoFuncion = path.join(cwd, 'supabase', 'functions', 'gestionar-usuarios', 'index.ts')
+          await mkdir(path.dirname(archivoFuncion), { recursive: true })
+          await cp(path.join(AQUI, 'web', 'funcion-usuarios.ts'), archivoFuncion)
+          relFuncion = path.relative(cwd, archivoFuncion).split(path.sep).join('/')
+          pasos.push(`✅ ${relFuncion}: función del servidor que crea y administra usuarios (la clave secreta queda solo en Supabase). Roles: ${sql.roles.join(', ')}.`)
+        }
         const token = process.env.SUPABASE_ACCESS_TOKEN
         const ref = new URL(url).hostname.split('.')[0]
         let aplicadoSql = false, aplicadaFuncion = false
         if (args.aplicar && token && /\.supabase\.co$/.test(new URL(url).hostname)) {
+          const consulta = async (query) => { const r = await fetch(`https://api.supabase.com/v1/projects/${ref}/database/query`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ query }), signal: exec.signal }); const cuerpo = await r.text(); if (!r.ok) throw new Error(`(${r.status}) ${cuerpo.slice(0, 600)}`); try { return JSON.parse(cuerpo) } catch { return cuerpo } }
           try {
-            const r = await fetch(`https://api.supabase.com/v1/projects/${ref}/database/query`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ query: sql.sql }), signal: exec.signal })
-            const cuerpo = await r.text()
-            aplicadoSql = r.ok
-            pasos.push(r.ok ? '✅ SQL aplicado en Supabase.' : `❌ Supabase rechazó el SQL (${r.status}): ${cuerpo.slice(0, 600)}`)
-          } catch (e) { pasos.push(`❌ No pude aplicar el SQL: ${e.message}. Pégalo a mano en el SQL Editor.`) }
-          try {
+            let aplicadas = []
+            try { aplicadas = (await consulta("select nombre from public.migraciones")).map((f) => f.nombre) } catch {}
+            const pendientes = todas.filter((n) => !aplicadas.includes(n.replace(/\.sql$/, '')))
+            for (const n of pendientes) { await consulta(await readFile(path.join(dirMig, n), 'utf8')); pasos.push(`✅ Aplicada ${n}`) }
+            if (!pendientes.length) pasos.push('✅ La base ya tenía todas las migraciones.')
+            aplicadoSql = true
+          } catch (e) { pasos.push(`❌ Supabase rechazó una migración ${e.message}. Revisa y pega ${relSql} en el SQL Editor.`) }
+          if (archivoFuncion) try {
             const form = new FormData()
             form.append('metadata', JSON.stringify({ name: 'gestionar-usuarios', entrypoint_path: 'index.ts', verify_jwt: true }))
             form.append('file', new Blob([await readFile(archivoFuncion)], { type: 'application/typescript' }), 'index.ts')
@@ -845,14 +503,15 @@ export function apply(ctx, rawConfig) {
           } catch (e) { pasos.push(`❌ No pude publicar la función: ${e.message}`) }
         }
         if (!aplicadoSql) pasos.push(`Falta el SQL: ${args.aplicar && !token ? 'no hay SUPABASE_ACCESS_TOKEN en este PC, así que ' : ''}abre Supabase → SQL Editor, pega ${relSql} y dale Run (se puede repetir sin problema).`)
-        if (!aplicadaFuncion) pasos.push(`Falta la función: Supabase → Edge Functions → Deploy a new function → "Via Editor", nombre gestionar-usuarios, pega ${relFuncion} y Deploy (o con la CLI: supabase functions deploy gestionar-usuarios).`)
-        pasos.push(
+        if (archivoFuncion && !aplicadaFuncion) pasos.push(`Falta la función: Supabase → Edge Functions → Deploy a new function → "Via Editor", nombre gestionar-usuarios, pega ${relFuncion} y Deploy (o con la CLI: supabase functions deploy gestionar-usuarios).`)
+        if (sql) pasos.push(
           'Después, díselo al usuario paso a paso:',
           '1. Authentication → Users → Add user: crea SOLO tu usuario (el del administrador).',
           "2. En el SQL Editor: update public.perfiles set rol = 'admin' where correo = 'tu@correo.com';",
           '3. Entra a la app con ese usuario: desde "Usuarios" creas a los demás, con su rol y sede, y ajustas permisos por rol y por automatización.',
           ...(args.registro ? [] : ['4. Authentication → Sign In / Providers: desactiva "Allow new users to sign up" para que solo entren los usuarios creados.']),
         )
+        if (sqlCambios) pasos.push('⚠ Antes de aplicar cambios que renombran o quitan cosas, sube la versión mínima de la app (pestaña Sistema o escritorio_empaquetar { minima }) para que los equipos con la versión vieja no sigan escribiendo con los nombres viejos.')
       } else {
         pasos.push('Sin "tablas": si las tablas ya existen, verifica que tengan Row Level Security con políticas y estén en la publicación supabase_realtime. Pasa "tablas" para que genere ese SQL.')
       }
@@ -864,7 +523,7 @@ export function apply(ctx, rawConfig) {
     name: 'escritorio_empaquetar',
     description: 'Crea el instalador de la app para este computador (Windows: .exe; Mac: .dmg; Linux: .AppImage) en escritorio/instaladores/. Para Windows y Mac a la vez usa escritorio_publicar (GitHub Actions).',
     timeoutMs: (DEFAULTS.minutosEmpaquetar + 22) * 60_000,
-    parameters: { type: 'object', properties: { carpeta: { type: 'string' }, version: { type: 'string', description: 'Versión del instalador, ej. 1.0.1 (opcional)' }, notas: { type: 'string', description: 'Novedades de esta versión, para la página de descargas.' } } },
+    parameters: { type: 'object', properties: { carpeta: { type: 'string' }, version: { type: 'string', description: 'Versión del instalador, ej. 1.0.1 (opcional)' }, notas: { type: 'string', description: 'Novedades de esta versión, para la página de descargas.' }, minima: { type: 'string', description: 'Versión mínima obligatoria, ej. 1.3.0: los equipos con una menor se bloquean y piden actualizar (úsala cuando cambies la base de datos).' } } },
     output: salida,
     async execute(args, exec) {
       const cwd = await ctx.workingDirectory.ensure(exec.agent, exec.signal)
@@ -887,7 +546,7 @@ export function apply(ctx, rawConfig) {
       let sitio = null
       if (conf.sitio) {
         await asegurarScriptsSitio(dir)
-        const s = await correr(process.execPath, [path.join(dir, 'scripts', 'armar-sitio.cjs'), '--desde', out, '--salida', path.join(dir, 'sitio'), ...(args?.notas ? ['--notas', args.notas] : [])], { cwd: dir, signal: exec.signal, timeoutMs: 5 * 60_000 })
+        const s = await correr(process.execPath, [path.join(dir, 'scripts', 'armar-sitio.cjs'), '--desde', out, '--salida', path.join(dir, 'sitio'), ...(args?.notas ? ['--notas', args.notas] : []), ...(args?.minima ? ['--minima', args.minima] : [])], { cwd: dir, signal: exec.signal, timeoutMs: 5 * 60_000 })
         sitio = s.codigo === 0 ? `✅ Sitio de descargas actualizado en ${rel}/sitio/: súbelo completo a ${conf.sitio} (reemplazando lo anterior). Las apps instaladas verán la versión nueva y avisarán.` : `⚠ No pude armar el sitio: ${finalDe(s.salida, 600)}`
       }
       return [
@@ -899,6 +558,46 @@ export function apply(ctx, rawConfig) {
       ].filter(Boolean).join('\n')
     },
   })
+
+  function automatizacionCopias(nombreApp, tablas) {
+    const carpeta = `~/Documents/${String(nombreApp).replace(/[\\/:*?"<>|]+/g, '-')}/Copias`
+    return `// Copia de seguridad diaria de la base (generada por dsh-escritorio). Corre en el equipo del administrador.
+module.exports = {
+  nombre: 'Copia de seguridad de la base',
+  descripcion: 'Cada día a las 8 pm guarda todas las tablas en ${carpeta.slice(2)} (JSON y CSV) y conserva las últimas 30 copias.',
+  cuando: { cron: '0 20 * * *' },
+  ponerseAlDia: true, // si el PC estaba apagado a las 8 pm, la hace al abrir
+  correEn: { rol: 'admin' }, // el administrador ve todas las filas
+  tiempoMaximo: '20m',
+  reintentos: 2,
+  enPrueba: false,
+
+  async ejecutar({ db, archivos, registro, progreso }) {
+    const tablas = ${JSON.stringify(tablas)}
+    const dia = new Date().toISOString().slice(0, 10)
+    const carpeta = \`${carpeta}/\${dia}\`
+    const resumen = {}
+    for (const [i, t] of tablas.entries()) {
+      progreso((i / tablas.length) * 100, t)
+      const filas = []
+      for (let desde = 0; ; desde += 1000) {
+        const { data, error } = await db.from(t).select('*').range(desde, desde + 999)
+        if (error) throw new Error(\`\${t}: \${error.message}\`)
+        filas.push(...data)
+        if (data.length < 1000) break
+      }
+      archivos.escribir(\`\${carpeta}/\${t}.json\`, JSON.stringify(filas, null, 1))
+      if (filas.length) archivos.escribir(\`\${carpeta}/\${t}.csv\`, archivos.csv(filas.map((f) => Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v && typeof v === 'object' ? JSON.stringify(v) : v])))))
+      resumen[t] = filas.length
+    }
+    const viejas = archivos.listar('${carpeta}', '????-??-??').sort().slice(0, -30)
+    for (const v of viejas) require('node:fs').rmSync(v, { recursive: true, force: true })
+    registro(\`copia en \${archivos.ruta(carpeta)}\`)
+    return { carpeta: archivos.ruta(carpeta), filas: resumen, borradasViejas: viejas.length }
+  },
+}
+`
+  }
 
   async function asegurarScriptsSitio(dir) {
     await mkdir(path.join(dir, 'scripts'), { recursive: true })
