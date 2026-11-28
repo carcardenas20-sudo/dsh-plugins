@@ -19,10 +19,6 @@ jobs:
           node-version: 22
       - if: matrix.tec == 'tauri'
         uses: dtolnay/rust-toolchain@stable
-      - if: matrix.tec == 'tauri'
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: demo/src-tauri
       - if: matrix.tec == 'tauri' && runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev xvfb imagemagick
       - if: matrix.tec == 'java'
@@ -37,6 +33,10 @@ jobs:
         run: if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) { choco install wixtoolset --version=3.14.1 -y --no-progress; echo "C:\Program Files (x86)\WiX Toolset v3.14\bin" >> $env:GITHUB_PATH }
       - name: Crear la app de prueba
         run: node tests/ci/crear-demo.mjs demo ${{ matrix.tec }}
+      - if: matrix.tec == 'tauri'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: demo/src-tauri
       - name: Dependencias
         working-directory: demo
         run: npm install --no-audit --no-fund

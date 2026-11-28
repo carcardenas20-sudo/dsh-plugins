@@ -14,7 +14,7 @@ await writeFile(path.join(dir, 'escritorio.config.json'), JSON.stringify({ nombr
 await writeFile(path.join(dir, 'automatizaciones/con-clave.js'), `module.exports = { nombre: 'Con clave', cuando: { manual: true }, secretos: ['clave'], async ejecutar({ secreto, registro }) { registro('pidiendo clave'); const c = await secreto('clave'); if (c !== 'demo123') throw new Error('clave incorrecta: ' + c); return { largo: c.length } } }`)
 await writeFile(path.join(dir, 'automatizaciones/robot.js'), `module.exports = { nombre: 'Robot de navegador', cuando: { manual: true }, async ejecutar({ robot }) { const p = await robot(); await p.goto('data:text/html,<h1>Hola robot</h1>'); const t = await p.textContent('h1'); await p.captura('hola'); return t } }`)
 // página: datos-en-vivo con Supabase real (sin iniciar sesión: la clave pública y las políticas deciden)
-const web = path.join(dir, '.web-prueba'); await mkdir(web, { recursive: true })
+const web = path.join(dir, 'web-prueba'); await mkdir(web, { recursive: true })
 await copyFile(new URL('../../plugins/dsh-escritorio/web/datos-en-vivo.js', import.meta.url), path.join(web, 'datos-en-vivo.js'))
 await writeFile(path.join(web, 'entrada.js'), `import { crearDatos } from './datos-en-vivo.js'
 const estado = { tecnologia: window.escritorio && window.escritorio.tecnologia, idb: typeof indexedDB, conexion: null, config: null, vacia: null }

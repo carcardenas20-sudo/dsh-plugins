@@ -169,5 +169,5 @@ Compila Windows, Mac y Linux, y publica solo si los tres salen bien. Las apps in
 Harness Desktop: **solo desde la app**, en Plugins → Add plugin:
 
 ```
-https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.7.0.tgz
+https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.8.0.tgz
 ```
