@@ -7,7 +7,7 @@
 //   conectarUI(datos, { titulo: 'Academia', subtitulo: 'Inicia sesión para continuar' })
 //
 //   <acceso-escritorio>   … toda tu app aquí: solo se muestra con sesión iniciada …   </acceso-escritorio>
-//   <estado-conexion></estado-conexion>      "En línea" · "Sin conexión · 3 cambios por subir" · "Reconectando…"
+//   <estado-conexion></estado-conexion>      "En línea" · "Sin conexión · 3 cambios por subir" · "Reconectando…" (+ conflictos y rechazados)
 //   <usuario-escritorio></usuario-escritorio> nombre, rol y botón Salir
 //   <admin-usuarios></admin-usuarios>         usuarios, roles y permisos, y actividad de automatizaciones (solo quien gestiona usuarios)
 //
@@ -129,7 +129,7 @@ class EstadoConexion extends HTMLElement {
       .botones { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
       .botones button { border-radius: 999px; padding: 8px 15px; font-weight: 600; font-size: 13px; cursor: pointer; border: 1px solid var(--borde); background: transparent; color: var(--txt); }
       .botones button.prim { background: var(--a); color: var(--a-txt); border-color: transparent; }
-    </style><span class="chip" role="status" aria-live="polite"><span class="punto"></span><span data-t></span></span><button class="chip conf" type="button" hidden></button><dialog></dialog>`
+    </style><span class="chip" role="status" aria-live="polite"><span class="punto"></span><span data-t></span></span><button class="chip conf" type="button" hidden></button><button class="chip conf rech" type="button" hidden style="--c: var(--err)"></button><dialog></dialog>`
     const chip = r.querySelector('.chip'), t = r.querySelector('[data-t]')
     const botonConf = r.querySelector('.conf'), dialogo = r.querySelector('dialog')
     const mostrarConflicto = () => {
@@ -143,6 +143,20 @@ class EstadoConexion extends HTMLElement {
       if (!dialogo.open) dialogo.showModal()
     }
     botonConf.onclick = mostrarConflicto
+    const botonRech = r.querySelector('.rech')
+    const mostrarRechazos = () => {
+      const l = DATOS.rechazados?.() || []
+      if (!l.length) return dialogo.close?.()
+      dialogo.innerHTML = `<h3>Cambios que la base no aceptó</h3><p>Se guardaron en este equipo (quizás sin internet) pero al subirlos la base los rechazó. Puedes reintentar (por ejemplo, si ya te dieron el permiso) o descartarlos.</p>
+        <table><thead><tr><th>Qué</th><th>Motivo</th><th></th></tr></thead><tbody>${l.map((x, i) => `<tr><td>${x.op.tipo === 'borrar' ? 'Borrar' : 'Guardar'} en <b>${esc(x.op.tabla)}</b><br><small>${esc(new Date(x.en).toLocaleString())}</small></td><td>${esc(x.error)}</td><td style="white-space:nowrap"><div class="botones"><button type="button" data-r="${i}">Reintentar</button><button type="button" data-d="${i}">Descartar</button></div></td></tr>`).join('')}</tbody></table>
+        <div class="botones"><button type="button" data-c>Cerrar</button></div>`
+      dialogo.querySelectorAll('[data-r]').forEach((b) => (b.onclick = () => { DATOS.reintentarRechazo(Number(b.dataset.r)); setTimeout(mostrarRechazos, 300) }))
+      dialogo.querySelectorAll('[data-d]').forEach((b) => (b.onclick = () => { DATOS.descartarRechazo(Number(b.dataset.d)); mostrarRechazos() }))
+      dialogo.querySelector('[data-c]').onclick = () => dialogo.close()
+      if (!dialogo.open) dialogo.showModal()
+    }
+    botonRech.onclick = mostrarRechazos
+    this._pararRech = DATOS.alRechazo?.((l) => { botonRech.hidden = !l.length; botonRech.textContent = `✕ ${l.length} sin subir` })
     this._pararConf = DATOS.alConflicto?.((l) => { botonConf.hidden = !l.length; botonConf.textContent = `⚠ ${l.length} conflicto${l.length === 1 ? '' : 's'}` })
     this._parar = DATOS.alCambiarConexion(({ estado, pendientes }) => {
       const p = pendientes ? ` · ${pendientes} cambio${pendientes === 1 ? '' : 's'} por subir` : ''
@@ -152,7 +166,7 @@ class EstadoConexion extends HTMLElement {
       this.dataset.estado = estado
     })
   }
-  disconnectedCallback() { this._parar?.(); this._pararConf?.() }
+  disconnectedCallback() { this._parar?.(); this._pararConf?.(); this._pararRech?.() }
 }
 
 class UsuarioEscritorio extends HTMLElement {

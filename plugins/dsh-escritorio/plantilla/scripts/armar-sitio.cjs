@@ -49,7 +49,8 @@ function armar({ desde, salida, notas = '', minima = null, config, pkg }) {
     }
   }
   if (!Object.keys(archivos).length) throw new Error('No hay instaladores (.exe, .dmg, .AppImage) en esas carpetas: empaqueta primero')
-  if (!fs.readdirSync(destino).some((n) => /^latest.*\.ya?ml$/.test(n))) throw new Error('Faltan los latest*.yml: empaqueta con la configuración de publicación del plugin')
+  // las apps Tauri y Java avisan solo con version.json; las Electron además usan latest*.yml
+  if ((config?.tecnologia || 'electron') === 'electron' && !fs.readdirSync(destino).some((n) => /^latest.*\.ya?ml$/.test(n))) throw new Error('Faltan los latest*.yml: empaqueta con la configuración de publicación del plugin')
   if (minima && !/^\d+\.\d+\.\d+$/.test(minima)) throw new Error(`versión mínima inválida: ${minima}`)
   let anterior = null
   try { anterior = JSON.parse(fs.readFileSync(path.join(destino, 'version.json'), 'utf8')) } catch {}

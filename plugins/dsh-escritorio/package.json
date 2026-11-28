@@ -1,14 +1,48 @@
 {
   "name": "dsh-escritorio",
-  "version": "0.7.0",
-  "description": "Convierte la interfaz del proyecto en una app de escritorio para Windows y Mac (Electron): bandeja, atajo global, archivos del PC, notificaciones, actualizaciones; la prueba abriéndola de verdad, crea el instalador y compila Windows y Mac en GitHub Actions",
+  "version": "0.8.0",
+  "description": "Convierte la interfaz del proyecto en una app de escritorio para Windows y Mac con Electron, Tauri (Rust) o JavaFX (Java): bandeja, archivos del PC, notificaciones, automatizaciones y robots, datos en vivo con Supabase y trabajo sin internet, aviso de versiones; la prueba abriéndola de verdad, crea el instalador y compila Windows y Mac en GitHub Actions",
   "type": "module",
   "main": "index.js",
-  "files": ["index.js", "tablas.js", "lib", "plantilla", "web", "cordis.patch.yml", "README.md", "PRUEBA-WINDOWS.md"],
-  "keywords": ["dsh-plugin", "deepseek-harness", "electron", "escritorio", "windows", "mac", "instalador"],
+  "files": [
+    "index.js",
+    "tablas.js",
+    "lib",
+    "plantilla",
+    "plantilla-comun",
+    "plantilla-tauri",
+    "plantilla-java",
+    "web",
+    "cordis.patch.yml",
+    "README.md",
+    "PRUEBA-WINDOWS.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "electron",
+    "escritorio",
+    "windows",
+    "mac",
+    "instalador",
+    "tauri",
+    "rust",
+    "java",
+    "javafx"
+  ],
   "author": "Carlos Cárdenas",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git", "directory": "plugins/dsh-escritorio" },
-  "engines": { "node": ">=22" },
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/carcardenas20-sudo/dsh-plugins.git",
+    "directory": "plugins/dsh-escritorio"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
 }

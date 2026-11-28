@@ -1,0 +1,11 @@
+// Convierte build/icono.svg en build/icon.png (1024 px) sin Electron, para las apps Tauri y Java.
+const fs = require('node:fs')
+const path = require('node:path')
+const raiz = path.join(__dirname, '..')
+const svg = path.join(raiz, 'build', 'icono.svg')
+const png = path.join(raiz, 'build', 'icon.png')
+if (fs.existsSync(png) && !process.argv.includes('--forzar')) process.exit(0)
+const { Resvg } = require('@resvg/resvg-js')
+const r = new Resvg(fs.readFileSync(svg), { fitTo: { mode: 'width', value: 1024 }, font: { loadSystemFonts: true } })
+fs.writeFileSync(png, r.render().asPng())
+console.log('Ícono: build/icon.png')

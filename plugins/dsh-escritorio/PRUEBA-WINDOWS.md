@@ -56,4 +56,20 @@ Abre la app en **dos PCs**, o instálala también en un portátil, con usuarios 
 - [ ] Instala esa 1.0.0. Luego: *"Empaqueta la 1.0.1 con la novedad 'Nuevo reporte'"* y sube otra vez la carpeta.
 - [ ] Al abrir la 1.0.0 aparece "Hay una versión nueva: 1.0.1" y el botón Descargar abre la página.
 
+## 8. Sin internet de verdad
+
+- [ ] Con la app abierta y sesión iniciada, desconecta el WiFi y **cierra y vuelve a abrir la app**: las pantallas que ya habías visto siguen mostrando sus datos.
+- [ ] Sin internet, crea un pedido, edita otro y borra un tercero: los tres cambios se ven al instante en la lista (marcados como pendientes) y el indicador dice "3 cambios por subir".
+- [ ] Cierra la app, reconecta el WiFi y ábrela: los cambios se suben solos, en orden, y aparecen en el otro equipo.
+- [ ] Con el vendedor de Norte, sin internet, crea un cliente de **Sur** (algo que no tiene permitido). Al reconectar, el indicador muestra "✕ 1 sin subir" y deja **Reintentar** o **Descartar**.
+
+## 9. La misma app en Rust (Tauri) y en Java
+
+> Haz la misma app de escritorio con Tauri (en la carpeta escritorio-rust) y con Java (en escritorio-java). Pruébalas.
+
+- [ ] Si falta Rust o el JDK, la prueba explica qué instalar (`winget install Rustlang.Rustup` y las herramientas de C++; `winget install Microsoft.OpenJDK.21`). La primera compilación de Rust tarda unos minutos.
+- [ ] Las dos abren con el mismo inicio de sesión, los mismos datos en vivo y el mismo panel de automatizaciones (el robot usa Edge).
+- [ ] *"Haz los instaladores"*: el de Tauri pesa mucho menos que el de Electron.
+- [ ] Datos privados: en Tauri quedan en el Administrador de credenciales de Windows; en Java, `secretos.json` solo guarda la clave cifrada (DPAPI).
+
 Si algo falla, copia el mensaje o la captura y pásalo: cada fallo se convierte en una prueba automática nueva.

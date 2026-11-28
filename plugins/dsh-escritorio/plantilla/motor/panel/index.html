@@ -87,7 +87,7 @@ const fmt = new Intl.DateTimeFormat('es', { weekday: 'short', day: 'numeric', mo
 const fecha = (iso) => iso ? fmt.format(new Date(iso)) : '—'
 const dur = (ms) => ms == null ? '' : ms < 1000 ? `${ms} ms` : ms < 60e3 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 60e3)} min`
 let autos = []
-let elegida = new URLSearchParams(location.search).get('id')
+let elegida = new URLSearchParams(location.search).get('id') || window.__PANEL_ID__ || null
 
 function estadoChip(a) {
   if (a.error) return '<span class="chip mal"><span class="punto"></span>Con error</span>'
@@ -148,7 +148,7 @@ async function pintarDetalle() {
         <summary><span>${c.ok ? '<span class="chip ok">Bien</span>' : '<span class="chip mal">Falló</span>'} <span class="cuando">${fecha(c.inicio)} · ${dur(c.ms)} · ${esc(disparo(c.disparo || {}))}${c.intento > 1 ? ` · intento ${c.intento}` : ''}</span></span></summary>
         ${c.error ? `<div class="err">${esc(c.error)}</div>` : ''}
         ${c.resultado != null ? `<pre>${esc(typeof c.resultado === 'string' ? c.resultado : JSON.stringify(c.resultado, null, 2))}</pre>` : ''}
-        ${c.capturas?.length ? `<div class="fotos">${c.capturas.map((f) => `<img src="app://datos/${encodeURIComponent(f.archivo.split(/[\\/]/).pop())}" alt="Pantalla del robot en ${esc(f.url)}" title="${esc(f.url)}" data-archivo="${esc(f.archivo)}">`).join('')}</div>` : ''}
+        ${c.capturas?.length ? `<div class="fotos">${c.capturas.map((f) => `<img src="${window.escritorio?.fotos || 'app://datos/'}${encodeURIComponent(f.archivo.split(/[\\/]/).pop())}" alt="Pantalla del robot en ${esc(f.url)}" title="${esc(f.url)}" data-archivo="${esc(f.archivo)}">`).join('')}</div>` : ''}
         ${c.registros?.length ? `<pre>${esc(c.registros.join('\n'))}</pre>` : ''}
       </details>`).join('') : '<p class="sub" style="margin-top:20px">Todavía no se ha ejecutado.</p>'}`
 }

@@ -2,12 +2,26 @@
 // y ejecuta cada corrida en un proceso aparte (ejecutor.cjs) con tiempo máximo, reintentos e historial.
 // Disparadores ("cuando"): { cron } · { cada } · { carpeta, archivos } · { tabla, evento, filtro } · { alIniciar } · { manual }
 // o una lista de ellos.
+// Funciona dentro de Electron (utilityProcess) y también como programa de Node aparte (servidor.cjs), que es como lo
+// usan las apps hechas con Tauri (Rust) y JavaFX (Java).
 'use strict'
-const { utilityProcess, powerMonitor } = require('electron')
+// (en Node puro, require('electron') no existe o devuelve solo la ruta del programa: entonces no es Electron)
+const electron = (() => { try { const e = require('electron'); return e && typeof e === 'object' && e.utilityProcess ? e : null } catch { return null } })()
+const enElectron = !!electron
+const { utilityProcess, powerMonitor } = electron || {}
+const { fork } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
 const { parsearCron, siguienteCron, duracion } = require('./cron.cjs')
+
+// Cada corrida va en un proceso aparte: si una automatización se cuelga o revienta, la app sigue viva.
+function lanzar(archivo, nombre, conSalida) {
+  if (enElectron) return utilityProcess.fork(archivo, [], { serviceName: nombre, stdio: conSalida ? 'pipe' : 'ignore' })
+  const p = fork(archivo, [], { stdio: conSalida ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true })
+  p.postMessage = (m) => p.send(m)
+  return p
+}
 
 const MAX_SIMULTANEAS = 3
 const MAX_HISTORIAL = 800
@@ -174,7 +188,7 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
     const registros = []
     const anotarRegistro = (t) => { registros.push(`${new Date().toTimeString().slice(0, 8)} ${t}`); if (registros.length > 300) registros.splice(0, registros.length - 300) }
     const ejecutor = path.join(__dirname, 'ejecutor.cjs')
-    const p = utilityProcess.fork(ejecutor, [], { serviceName: `Automatización ${a.meta.nombre || a.id}`, stdio: 'pipe' })
+    const p = lanzar(ejecutor, `Automatización ${a.meta.nombre || a.id}`, true)
     a.proceso = p; a.progreso = null
     let terminado = false
     p.stdout?.on('data', (b) => String(b).split('\n').filter(Boolean).forEach((x) => anotarRegistro(x)))
@@ -216,7 +230,7 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
       else if (m.tipo === 'interfaz') alEventoInterfaz({ id: a.id, evento: m.evento, datos: m.datos })
       else if (m.tipo === 'encadenar') { if (autos.has(m.id)) encolar(m.id, { tipo: 'encadenada', desde: a.id, datos: m.datos }); else anotarRegistro(`⚠ no existe la automatización "${m.id}"`) }
       else if (m.tipo === 'progreso') { a.progreso = { porcentaje: m.porcentaje, texto: m.texto || '' }; cambio() }
-      else if (m.tipo === 'secreto') { let valor = null; try { valor = pedirSecreto(a.id, String(m.nombre)) } catch {} ; try { p.postMessage({ tipo: 'secreto-respuesta', pedido: m.pedido, valor }) } catch {} }
+      else if (m.tipo === 'secreto') Promise.resolve().then(() => pedirSecreto(a.id, String(m.nombre))).catch(() => null).then((valor) => { try { p.postMessage({ tipo: 'secreto-respuesta', pedido: m.pedido, valor: valor ?? null }) } catch {} })
       else if (m.tipo === 'fin') terminar(m)
     })
     p.on('exit', (codigo) => terminar({ ok: false, error: `El proceso de la automatización se cerró inesperadamente (código ${codigo}).` }))
@@ -341,7 +355,7 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
   function describir(archivos) {
     return new Promise((resolver) => {
       if (!archivos.length) return resolver([])
-      const p = utilityProcess.fork(path.join(__dirname, 'ejecutor.cjs'), [], { serviceName: 'Automatizaciones (lectura)', stdio: 'ignore' })
+      const p = lanzar(path.join(__dirname, 'ejecutor.cjs'), 'Automatizaciones (lectura)', false)
       const t = setTimeout(() => { try { p.kill() } catch {} ; resolver(archivos.map((archivo) => ({ archivo, error: 'no se pudo leer (tardó demasiado)' }))) }, 30e3)
       p.on('message', (m) => { if (m?.tipo === 'descripcion') { clearTimeout(t); resolver(m.lista) } })
       p.once('spawn', () => p.postMessage({ tipo: 'describir', archivos }))
@@ -362,7 +376,12 @@ function crearMotor({ carpetaAutomatizaciones, carpetaDatos, config, avisar, not
     }
     if (armarDisparadores) for (const a of autos.values()) armar(a)
     registrar(`motor: ${autos.size} automatizaciones (${[...autos.values()].filter((a) => a.error).length} con error)`)
-    powerMonitor.on('resume', () => { for (const a of autos.values()) if (a.disparadores.some((d) => d.cron || d.cada)) armar(a) })
+    const alDespertar = () => { for (const a of autos.values()) if (a.disparadores.some((d) => d.cron || d.cada)) armar(a) }
+    if (powerMonitor) powerMonitor.on('resume', alDespertar)
+    else { // fuera de Electron: si el reloj saltó más de 2 min, el PC estuvo dormido
+      let ultimo = Date.now()
+      setInterval(() => { const ahora = Date.now(); if (ahora - ultimo > 120e3) alDespertar(); ultimo = ahora }, 30e3).unref()
+    }
     cambio()
     return lista()
   }

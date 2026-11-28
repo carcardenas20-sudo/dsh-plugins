@@ -14,6 +14,23 @@ Convierte la interfaz de tu proyecto en una **app de escritorio para Windows y M
 
 La interfaz puede ser tu proyecto web (React/Vite: se compila solo), una carpeta con HTML, una web ya publicada o una página inicial nueva.
 
+## Electron, Tauri (Rust) o Java
+
+`escritorio_crear { tecnologia }` elige con qué se arma la app. Las tres usan la misma interfaz web, las mismas automatizaciones, `window.escritorio`, datos en vivo, modo sin internet, versión mínima y página de descargas del cliente.
+
+| | Electron (por defecto) | Tauri (Rust) | JavaFX (Java) |
+|---|---|---|---|
+| Ventana | Chromium propio | WebView2 de Windows / WebKit de Mac | WebView de JavaFX |
+| Instalador | ~90 MB | **~5 MB** sin robots, ~45 MB con robots | ~110 MB (lleva su Java) |
+| Para compilar en el PC | Nada extra | Rust y herramientas de C++ de Visual Studio | JDK 21 (y WiX 3 para el .exe) |
+| Actualizaciones | Automáticas o con aviso | Con aviso | Con aviso |
+| Atajo global de teclado | Sí | No | No |
+| Probado en GitHub Actions | Windows, Mac, Linux | Windows, Mac, Linux | Windows y Mac (en Linux el tiempo real no conecta: los datos se recargan cada 30 s) |
+
+Las tres compilan Windows, Mac y Linux en GitHub Actions con `escritorio_publicar`, sin instalar nada en el PC. Si la app tiene automatizaciones, Tauri y Java llevan dentro el Node que las ejecuta.
+
+Qué decirle a DeepSeek: *"Haz la app de escritorio con Tauri"* o *"…con Java"*.
+
 ## Automatizaciones y robots
 
 La app trae un motor que sigue trabajando con la ventana cerrada (desde la bandeja). Cada automatización es un archivo en `escritorio/automatizaciones/` y se dispara:
@@ -64,7 +81,7 @@ Qué decirle a DeepSeek:
 ```js
 import { datos } from './lib/datos.js'
 datos.enVivo('pagos', { orden: 'fecha' }, (filas) => pintar(filas)) // se actualiza solo en todos los PCs
-await datos.guardar('pagos', fila)                                  // sin internet queda en cola
+await datos.guardar('pagos', fila)                                  // sin internet se ve al instante y sube al volver
 datos.sesion.puede('pagos', 'borrar')                               // para mostrar u ocultar botones
 ```
 
@@ -107,6 +124,8 @@ Qué decirle a DeepSeek:
 - **Errores de todos los equipos.** Los fallos de la app, de la interfaz y de las automatizaciones llegan a la pestaña **Sistema**, con equipo, versión y usuario. Si no hay internet o sesión, esperan en cola.
 - **Historial de cambios.** Queda registrado quién creó, cambió o borró cada registro, cuándo, desde qué equipo y qué valor tenía antes.
 - **Copia de seguridad diaria.** El equipo del administrador guarda todas las tablas cada día a las 8 pm (JSON y CSV, últimas 30 copias). Si el PC estaba apagado, la hace al abrirlo.
+- **Trabaja sin internet.** Lo que ya se vio queda guardado en el equipo (IndexedDB, aguanta miles de registros). Lo que se guarda o borra sin conexión aparece al instante en las listas, marcado como pendiente, y se sube solo y en orden cuando vuelve el internet, aunque cierren la app entre tanto. `datos.precargar(['clientes', 'productos'])` deja tablas completas listas aunque nunca se hayan abierto esas pantallas. Si la base rechaza algo al subirlo (por ejemplo, por permisos), el indicador muestra "✕ 1 sin subir" con **Reintentar** o **Descartar**.
+- **Si el tiempo real no conecta** (un firewall que bloquea WebSocket, por ejemplo), las listas se recargan solas cada 30 segundos.
 - **Conflictos.** Si dos equipos editan el mismo registro, no se pisan. El indicador muestra "⚠ 1 conflicto" y el usuario elige qué versión queda.
 - **Claves de los robots en cada equipo.** Se guardan cifradas con el llavero de Windows o Mac desde el panel (Datos privados), nunca en el instalador. En el código se leen con `await secreto('clave')`.
 
@@ -121,7 +140,7 @@ Probado en un proyecto real de Supabase:
 
 | Herramienta | Qué hace |
 |---|---|
-| `escritorio_crear` | Crea la app en `escritorio/` con nombre, ícono, bandeja y atajo. |
+| `escritorio_crear` | Crea la app en `escritorio/` con nombre, ícono, bandeja y atajo, en Electron, Tauri (Rust) o Java. |
 | `escritorio_probar` | Instala lo necesario, abre la app de verdad, verifica errores, puente, bandeja y atajo, ejecuta las automatizaciones una vez y devuelve resultados, registros, fotos de los robots y capturas en claro y oscuro. |
 | `escritorio_automatizacion` | Crea una automatización (robot, horario, carpeta, tabla…) validando el disparador y el código. |
 | `escritorio_datos` | Conecta Supabase para varios equipos: tablas, roles con permisos por tabla y por automatización, usuarios creados desde la app, tiempo real, inicio de sesión y estado de conexión. |
@@ -168,5 +187,5 @@ Compila Windows, Mac y Linux, y publica solo si los tres salen bien. Las apps in
 Harness Desktop: **solo desde la app**, en Plugins → Add plugin:
 
 ```
-https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.7.0.tgz
+https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.8.0.tgz
 ```
