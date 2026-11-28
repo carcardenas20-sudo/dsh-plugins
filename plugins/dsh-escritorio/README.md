@@ -74,15 +74,31 @@ datos.sesion.puede('pagos', 'borrar')                               // para most
 2. Crea tu usuario en Supabase → Authentication y hazte admin con la línea del final del SQL.
 3. Entra a la app: desde **Usuarios** creas a todos los demás.
 
-## Página pública de descargas
+## Página de descargas del cliente (con aviso de actualización)
 
-`escritorio_publicar` deja una página en `https://<usuario>.github.io/<repo>/`:
+Cada app tiene su página web de descargas, en el dominio del cliente (por ejemplo `descargas.textilesx.com`) o en cualquier hosting (Netlify, Cloudflare Pages, Hostinger…). El cliente no necesita GitHub ni repositorio.
 
-- detecta Windows, Mac o Linux y ofrece el instalador correcto;
-- muestra la versión y siempre apunta a la última publicada;
-- explica en español qué hacer con el aviso de Windows o de Mac.
+Qué decirle a DeepSeek:
 
-Se publica sola con cada versión. Solo hay que activar GitHub Pages una vez (Settings → Pages → Source: GitHub Actions). El repositorio debe ser **público** para que las descargas y las actualizaciones funcionen.
+> La página de descargas de esta app será https://descargas.textilesx.com/. Que la app avise cuando haya versión nueva.
+
+`escritorio_sitio` configura la app. Así funciona con el cliente:
+
+1. **La app consulta esa dirección** al abrir y cada 4 horas.
+2. **Si hay versión nueva, avisa:** muestra la notificación "Hay una versión nueva: 1.1.0", un aviso dentro de la app y un botón **Descargar**. El botón abre la página. No descarga ni instala nada por su cuenta.
+3. **El usuario descarga desde la página** e instala encima. Conserva sus datos.
+
+**Cada vez que actualizas:**
+
+1. `escritorio_empaquetar { version: "1.1.0", notas: "Qué cambió" }` arma la carpeta `escritorio/sitio/`, con la página, `version.json`, el instalador de esta versión y `latest*.yml`.
+2. Subes el contenido de esa carpeta al hosting del cliente, reemplazando lo anterior. En Netlify basta con arrastrar la carpeta. En cPanel o Hostinger se usa el administrador de archivos.
+
+**Si quieres Windows y Mac a la vez sin tener un Mac:** usa `escritorio_publicar`. GitHub Actions compila los tres sistemas y deja el sitio listo como artefacto `sitio-de-descargas`. Si el repo tiene los secretos `NETLIFY_AUTH_TOKEN` y `NETLIFY_SITE_ID`, lo sube solo. Tu repositorio puede ser privado, porque el cliente solo ve su página.
+
+**Detalles:**
+- La página es editable (`escritorio/descargas/index.html`), con el color de la marca. Detecta Windows, Mac o Linux y muestra las novedades de la versión.
+- Se puede elegir `modo: "automatica"` para que descargue e instale sola al cerrar.
+- La dirección queda dentro del instalador, así que hay que configurarla **antes** de entregar la primera versión.
 
 ## Herramientas
 
@@ -92,6 +108,7 @@ Se publica sola con cada versión. Solo hay que activar GitHub Pages una vez (Se
 | `escritorio_probar` | Instala lo necesario, abre la app de verdad, verifica errores, puente, bandeja y atajo, ejecuta las automatizaciones una vez y devuelve resultados, registros, fotos de los robots y capturas en claro y oscuro. |
 | `escritorio_automatizacion` | Crea una automatización (robot, horario, carpeta, tabla…) validando el disparador y el código. |
 | `escritorio_datos` | Conecta Supabase para varios equipos: tablas, roles con permisos por tabla y por automatización, usuarios creados desde la app, tiempo real, inicio de sesión y estado de conexión. |
+| `escritorio_sitio` | Página de descargas en el dominio o hosting del cliente; la app avisa cuando hay versión nueva y abre la página. |
 | `escritorio_empaquetar` | Crea el instalador para tu computador (`.exe` en Windows, `.dmg` en Mac, `.AppImage` en Linux). |
 | `escritorio_publicar` | Escribe el flujo de GitHub Actions que compila Windows, Mac y Linux a la vez y publica versiones. No sube nada sin tu aprobación. |
 
@@ -134,5 +151,5 @@ Compila Windows, Mac y Linux, y publica solo si los tres salen bien. Las apps in
 Harness Desktop: **solo desde la app**, en Plugins → Add plugin:
 
 ```
-https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.5.0.tgz
+https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.6.0.tgz
 ```

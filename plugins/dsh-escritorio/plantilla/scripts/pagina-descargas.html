@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Descargas</title>
+<link rel="icon" href="icono.png">
+<style>
+:root{--fondo:#f5f5f7;--sup:#fff;--tinta:#1d1d1f;--suave:#6e6e73;--borde:rgba(0,0,0,.08);--acento:#0a66ff;color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--fondo:#000;--sup:#1c1c1e;--tinta:#f5f5f7;--suave:#98989d;--borde:rgba(255,255,255,.1);--acento:#3b8bff}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--fondo);color:var(--tinta);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+main{width:min(720px,calc(100% - 32px));margin:0 auto;padding:72px 0 48px;text-align:center}
+.icono{width:96px;height:96px;border-radius:24px;box-shadow:0 12px 40px rgba(0,0,0,.18);margin:0 auto 22px;display:block;object-fit:cover}
+h1{font-size:clamp(34px,6vw,52px);letter-spacing:-.03em;margin:0 0 8px;line-height:1.05}
+.sub{color:var(--suave);font-size:19px;margin:0 auto 30px;max-width:520px}
+.principal{display:inline-flex;align-items:center;gap:10px;background:var(--acento);color:#fff;text-decoration:none;font-weight:650;font-size:17px;padding:15px 28px;border-radius:999px;box-shadow:0 8px 24px color-mix(in srgb,var(--acento) 35%,transparent);transition:transform .15s,filter .15s}
+.principal:hover{filter:brightness(1.07);transform:translateY(-1px)}.principal:active{transform:scale(.98)}
+.principal.no{background:var(--borde);color:var(--suave);box-shadow:none;pointer-events:none}
+.version{color:var(--suave);font-size:14px;margin-top:14px;min-height:21px}
+.notas{background:var(--sup);border:1px solid var(--borde);border-radius:18px;padding:18px 22px;margin:30px 0 0;text-align:left;font-size:15px}
+.notas h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--suave);margin:0 0 8px}
+.notas p{margin:0;white-space:pre-wrap}
+.otros{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:24px 0 0;text-align:left}
+.otro{background:var(--sup);border:1px solid var(--borde);border-radius:18px;padding:18px;text-decoration:none;color:inherit;transition:border-color .15s}
+.otro:hover{border-color:var(--acento)}.otro b{display:block;font-size:16px}.otro span{color:var(--suave);font-size:14px}
+.ayuda{background:var(--sup);border:1px solid var(--borde);border-radius:18px;padding:20px 22px;margin-top:28px;text-align:left;font-size:14.5px;color:var(--suave)}
+.ayuda b{color:var(--tinta)}.ayuda p{margin:6px 0}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <img class="icono" src="icono.png" alt="" onerror="this.hidden=true">
+  <h1 id="nombre">Descargas</h1>
+  <p class="sub" id="desc">Instala la app en tu equipo. Cuando haya una versión nueva, la app te avisa y la descargas aquí.</p>
+  <a class="principal" id="principal" href="#">Descargar</a>
+  <div class="version" id="version"></div>
+  <section class="notas" id="notas" hidden><h2>Novedades</h2><p id="notas-texto"></p></section>
+  <div class="otros" id="otros"></div>
+  <div class="ayuda">
+    <p><b>Actualizar:</b> descarga e instala igual que la primera vez. Se instala encima y conserva tus datos.</p>
+    <p><b>Windows:</b> si aparece "Windows protegió su PC", toca <b>Más información → Ejecutar de todos modos</b>.</p>
+    <p><b>Mac:</b> la primera vez abre la app con clic derecho → <b>Abrir</b>.</p>
+  </div>
+</main>
+<script>
+(function () {
+  var so = /Mac|iPhone|iPad/.test(navigator.userAgent) ? 'mac' : /Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent) ? 'linux' : 'windows'
+  var NOMBRE = { windows: 'Windows', mac: 'Mac', linux: 'Linux' }
+  var DETALLE = { windows: 'Windows 10 y 11 · .exe', mac: 'Intel y Apple (M1–M4) · .dmg', linux: '.AppImage' }
+  var mb = function (b) { return b ? ' · ' + Math.round(b / 1e6) + ' MB' : '' }
+  fetch('version.json', { cache: 'no-store' }).then(function (r) { return r.json() }).then(function (v) {
+    document.title = 'Descargar ' + v.nombre
+    document.getElementById('nombre').textContent = v.nombre
+    if (v.descripcion) document.getElementById('desc').textContent = v.descripcion
+    if (v.color) document.documentElement.style.setProperty('--acento', v.color)
+    document.getElementById('version').textContent = 'Versión ' + v.version + ' · ' + new Date(v.fecha).toLocaleDateString('es', { day: 'numeric', month: 'long', year: 'numeric' })
+    if (v.notas) { document.getElementById('notas').hidden = false; document.getElementById('notas-texto').textContent = v.notas }
+    var a = v.archivos || {}, b = document.getElementById('principal')
+    if (a[so]) { b.href = encodeURI(a[so].archivo); b.textContent = 'Descargar para ' + NOMBRE[so] + mb(a[so].bytes) }
+    else { b.className = 'principal no'; b.textContent = 'Aún no está disponible para ' + NOMBRE[so] }
+    document.getElementById('otros').innerHTML = ['windows', 'mac', 'linux'].filter(function (k) { return a[k] }).map(function (k) {
+      return '<a class="otro" href="' + encodeURI(a[k].archivo) + '"><b>' + NOMBRE[k] + '</b><span>' + DETALLE[k] + mb(a[k].bytes) + '</span></a>'
+    }).join('')
+  }).catch(function () { document.getElementById('version').textContent = 'No se pudo leer la versión publicada.' })
+})()
+</script>
+</body>
+</html>

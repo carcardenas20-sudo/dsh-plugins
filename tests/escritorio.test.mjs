@@ -1,6 +1,6 @@
 import { apply, validarAtajo, paqueteApp, flujoGithub, iconoSvg, slug } from '../plugins/dsh-escritorio/index.js'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -67,6 +67,28 @@ assert.match(r, /supabase\/escritorio\.sql: pagos \+ perfiles \(rol admin\/usuar
 const sqlGen = await readFile(path.join(cwd, 'supabase/escritorio.sql'), 'utf8')
 assert.match(sqlGen, /enable row level security[^]*mi_sede\(\)[^]*supabase_realtime add table public\.pagos/)
 assert.match(await tools.escritorio_datos.execute({ instalar: false, tablas: [{ nombre: 'x', columnas: [{ nombre: 'id' }] }] }, {}), /❌ Tablas: .*la agrega el plugin/)
+
+// sitio de descargas del cliente
+r = await tools.escritorio_sitio.execute({ url: 'http://sitio.test/', color: '#c8102e' }, {})
+assert.match(r, /Usa https/)
+r = await tools.escritorio_sitio.execute({ url: 'https://descargas.textilesx.com', descripcion: 'Producción', color: '#c8102e' }, {})
+assert.match(r, /AVISARÁ[^]*descargas\/index\.html[^]*escritorio_empaquetar[^]*Subir TODO/)
+const pkgSitio = JSON.parse(await readFile(path.join(cwd, 'escritorio/package.json'), 'utf8'))
+assert.deepEqual(pkgSitio.build.publish, [{ provider: 'generic', url: 'https://descargas.textilesx.com/' }])
+const confSitio = JSON.parse(await readFile(path.join(cwd, 'escritorio/escritorio.config.json'), 'utf8'))
+assert.equal(confSitio.actualizaciones, 'aviso'); assert.equal(confSitio.paginaVersiones, 'https://descargas.textilesx.com/')
+assert.match(await readFile(path.join(cwd, 'escritorio/descargas/index.html'), 'utf8'), /--acento:#c8102e/)
+// armar el sitio con instaladores de dos versiones: solo la actual
+const { armar } = (await import('node:module')).createRequire(import.meta.url)(path.join(cwd, 'escritorio/scripts/armar-sitio.cjs'))
+const inst = path.join(cwd, 'escritorio/instaladores'); await mkdir(inst, { recursive: true })
+for (const [n, c] of [['textiles-x-1.0.0-win-x64.exe', 'viejo'], ['textiles-x-1.0.1-win-x64.exe', 'nuevo'], ['textiles-x-1.0.1-win-x64.exe.blockmap', 'b'], ['textiles-x-windows.exe', 'copia'], ['latest.yml', 'version: 1.0.1\nfiles:\n  - url: textiles-x-1.0.1-win-x64.exe\npath: textiles-x-1.0.1-win-x64.exe\n']]) await writeFile(path.join(inst, n), c)
+const hecho = armar({ desde: [inst], salida: path.join(cwd, 'escritorio/sitio'), notas: 'Arreglos', config: { nombre: 'Textiles X' }, pkg: { version: '1.0.1' } })
+assert.deepEqual(hecho.info.archivos, { windows: { archivo: 'textiles-x-1.0.1-win-x64.exe', bytes: 5 } })
+assert.deepEqual((await readdir(path.join(cwd, 'escritorio/sitio'))).sort(), ['index.html', 'latest.yml', 'textiles-x-1.0.1-win-x64.exe', 'textiles-x-1.0.1-win-x64.exe.blockmap', 'version.json'])
+assert.equal(JSON.parse(await readFile(path.join(cwd, 'escritorio/sitio/version.json'), 'utf8')).notas, 'Arreglos')
+// publicar con sitio: no pisa la dirección y el flujo arma el sitio
+const ySitio = flujoGithub({ dirRel: 'escritorio', webDirRel: '.', nombre: 'Textiles X', sitio: 'https://descargas.textilesx.com/' })
+assert.match(ySitio, /armar-sitio\.cjs --desde salida --salida sitio[^]*name: sitio-de-descargas[^]*netlify-cli/)
 
 cwd = path.join(base, 'nueva'); await mkdir(cwd)
 r = await tools.escritorio_crear.execute({ nombre: 'Notas', bandeja: false }, {})

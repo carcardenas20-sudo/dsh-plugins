@@ -173,6 +173,8 @@ ipcMain.handle('inicio-sistema', (ev, activar) => { if (permitidoIpc(ev)) { if (
 let actualizador = null
 let actualizacion = { estado: 'inactivo' }
 const MAC_SIN_FIRMA = process.platform === 'darwin' && !CONFIG.macFirmada
+// "aviso": la app avisa que hay versión nueva y abre el portal de descargas; no descarga ni instala sola.
+const SOLO_AVISO = MAC_SIN_FIRMA || CONFIG.actualizaciones === 'aviso'
 const registrar = (m) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'actualizaciones.log'), `${new Date().toISOString()} ${m}\n`) } catch {} }
 function fijarActualizacion(cambio) {
   actualizacion = { ...actualizacion, ...cambio }
@@ -188,7 +190,8 @@ function aviso(titulo, cuerpo, alTocar) {
 function abrirPaginaVersiones() {
   const p = (actualizador?.config ?? CONFIG.publicacion) || {}
   const url = CONFIG.paginaVersiones || (p.owner && p.repo ? `https://github.com/${p.owner}/${p.repo}/releases/latest` : null)
-  if (url) shell.openExternal(url)
+  registrar(`abriendo la página de descargas: ${url}`)
+  if (url) shell.openExternal(url).catch(() => {})
 }
 function instalarActualizacion() {
   if (actualizacion.estado !== 'lista' || !actualizador) return
@@ -205,8 +208,8 @@ function buscarActualizaciones() {
   if (!app.isPackaged || PRUEBA || !CONFIG.actualizaciones) return
   try { actualizador = require('electron-updater').autoUpdater } catch (e) { registrar(`sin electron-updater: ${e.message}`); return }
   const au = actualizador
-  au.autoDownload = !MAC_SIN_FIRMA
-  au.autoInstallOnAppQuit = true
+  au.autoDownload = !SOLO_AVISO
+  au.autoInstallOnAppQuit = !SOLO_AVISO
   au.logger = { info: (m) => registrar(m), warn: (m) => registrar(`aviso: ${m}`), error: (m) => registrar(`error: ${m}`), debug() {} }
   registrar(`versión instalada ${app.getVersion()} (${process.platform})`)
   au.on('checking-for-update', () => fijarActualizacion({ estado: 'buscando' }))
@@ -215,9 +218,10 @@ function buscarActualizaciones() {
     fijarActualizacion({ estado: 'al-dia', manual: false })
   })
   au.on('update-available', (i) => {
-    if (MAC_SIN_FIRMA) {
+    if (SOLO_AVISO) {
       fijarActualizacion({ estado: 'disponible', version: i.version, manual: false })
       aviso(`${CONFIG.nombre} ${i.version}`, 'Hay una versión nueva. Toca para descargarla.', abrirPaginaVersiones)
+      if (process.env.DSH_ESCRITORIO_ACTUALIZAR_YA) setTimeout(abrirPaginaVersiones, 500) // para pruebas automáticas
     } else fijarActualizacion({ estado: 'descargando', version: i.version, progreso: 0, manual: false })
   })
   au.on('download-progress', (p) => { const pr = Math.round(p.percent); if (pr !== actualizacion.progreso) fijarActualizacion({ progreso: pr }) })

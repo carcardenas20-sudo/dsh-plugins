@@ -84,7 +84,7 @@ export function paqueteApp(o) {
   }
 }
 
-export function flujoGithub({ dirRel, webDirRel, nombre, paginaRel = null }) {
+export function flujoGithub({ dirRel, webDirRel, nombre, paginaRel = null, sitio = null }) {
   const enDir = dirRel === '.' ? '' : `\n        working-directory: ${dirRel}`
   const sal = `${dirRel === '.' ? '' : `${dirRel}/`}instaladores`
   return `# Compila ${nombre} para Windows, Mac y Linux en los servidores de GitHub (generado por dsh-escritorio).
@@ -102,6 +102,10 @@ on:
     inputs:
       version:
         description: 'Versión a publicar, ej. 1.2.0 (mayor que la anterior). Vacío = solo compilar.'
+        required: false
+        default: ''
+      notas:
+        description: 'Novedades de esta versión (se ven en la página de descargas).'
         required: false
         default: ''
 
@@ -164,7 +168,9 @@ ${webDirRel ? `      - name: Dependencias de la interfaz
     needs: compilar
     if: startsWith(github.ref, 'refs/tags/escritorio-v') || inputs.version != ''
     runs-on: ubuntu-latest
-    steps:
+${sitio ? `    env:
+      TIENE_NETLIFY: \${{ secrets.NETLIFY_AUTH_TOKEN != '' }}
+` : ''}    steps:
       - uses: actions/download-artifact@v4
         with:
           path: salida
@@ -191,7 +197,27 @@ ${webDirRel ? `      - name: Dependencias de la interfaz
           else
             gh release create "$T" salida/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "${nombre} $V" --latest --notes "$NOTAS"
           fi
-${paginaRel ? `
+${sitio ? `      - uses: actions/checkout@v4
+        with:
+          path: repo
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Sitio de descargas del cliente (${sitio})
+        env:
+          NOTAS: \${{ inputs.notas }}
+        run: node repo/${dirRel === '.' ? '' : `${dirRel}/`}scripts/armar-sitio.cjs --desde salida --salida sitio --notas "$NOTAS"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sitio-de-descargas
+          path: sitio
+      - name: Publicar en Netlify (si el repo tiene NETLIFY_AUTH_TOKEN y NETLIFY_SITE_ID)
+        env:
+          NETLIFY_AUTH_TOKEN: \${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: \${{ secrets.NETLIFY_SITE_ID }}
+        if: env.TIENE_NETLIFY == 'true'
+        run: npx --yes netlify-cli@17 deploy --dir sitio --prod --site "$NETLIFY_SITE_ID"
+` : ''}${paginaRel ? `
   pagina:
     # Página pública de descargas en GitHub Pages (actívala una vez: Settings → Pages → Source: GitHub Actions).
     needs: publicar
@@ -337,6 +363,7 @@ const REGLAS = [
   '### Real-time data for several PCs',
   'For an app used on several computers with live shared data, use escritorio_datos with Supabase (url + public anon/publishable key only; it refuses service_role/secret keys). Pass "tablas" so it generates supabase/escritorio.sql: tables with id/creado_por/creado/actualizado, row-level security by "acceso" (autenticados · propietario · por-columna, e.g. each PC/sede sees only its rows · solo-lectura), a perfiles table with rol admin/usuario and the access column, and realtime enabled. With aplicar:true and SUPABASE_ACCESS_TOKEN on the PC it runs the SQL; otherwise tell the user to paste it in the SQL Editor, create one user per person/PC, and set the admin and each user\'s sede with the commented lines.',
   'Users and roles: pass "roles" to escritorio_datos (admin always exists). Each role has permisos per table {acciones: leer/crear/cambiar/borrar, alcance: todo | sede | propio}, automatizaciones it may run (ids or "*") and gestionaUsuarios. Permissions are data: the admin edits them later from the app. Users are created INSIDE the app with <admin-usuarios> through the server function supabase/functions/gestionar-usuarios (deploy it; the secret key stays in Supabase). Only the first admin is created in the Supabase dashboard.',
+  'Client download page: when the app is for a client (they have a website, not a repository), call escritorio_sitio with the page URL (their domain or a host like Netlify) BEFORE the first installer is delivered. Default modo aviso: the app notifies of a new version and opens that page; nothing installs by itself. Each release: escritorio_empaquetar { version, notas }, then upload the whole escritorio/sitio/ folder to that host. For Windows+Mac at once, escritorio_publicar builds on GitHub Actions and leaves the artifact sitio-de-descargas (or deploys to Netlify with NETLIFY_AUTH_TOKEN/NETLIFY_SITE_ID secrets).',
   'Automations with several PCs: once Supabase is connected, automations only run for a logged-in user whose role allows them; scheduled ones (cron/cada) and table triggers run on ONE PC per turn (shared turn table); set unaVez:false when each PC must run it (local backups), and correEn:{ sede:"Norte" } / { rol:"admin" } / { equipo:"CAJA-1" } to pin where it runs. Every run is logged to automatizacion_corridas (Actividad tab).',
   'In the UI: import src/lib/datos.js once; wrap the whole app in <acceso-escritorio> (login screen until there is a session), put <estado-conexion> and <usuario-escritorio> in the top bar, read with datos.enVivo(tabla, {filtro, orden}, setFilas) and write with datos.guardar/borrar (queued while offline). Never put a Postgres connection string (Neon, Supabase DB password) inside an installed app: anyone can extract it; use Supabase with RLS, or an API server in between.',
 ].join('\n')
@@ -837,7 +864,7 @@ export function apply(ctx, rawConfig) {
     name: 'escritorio_empaquetar',
     description: 'Crea el instalador de la app para este computador (Windows: .exe; Mac: .dmg; Linux: .AppImage) en escritorio/instaladores/. Para Windows y Mac a la vez usa escritorio_publicar (GitHub Actions).',
     timeoutMs: (DEFAULTS.minutosEmpaquetar + 22) * 60_000,
-    parameters: { type: 'object', properties: { carpeta: { type: 'string' }, version: { type: 'string', description: 'Versión del instalador, ej. 1.0.1 (opcional)' } } },
+    parameters: { type: 'object', properties: { carpeta: { type: 'string' }, version: { type: 'string', description: 'Versión del instalador, ej. 1.0.1 (opcional)' }, notas: { type: 'string', description: 'Novedades de esta versión, para la página de descargas.' } } },
     output: salida,
     async execute(args, exec) {
       const cwd = await ctx.workingDirectory.ensure(exec.agent, exec.signal)
@@ -857,13 +884,80 @@ export function apply(ctx, rawConfig) {
       const out = path.join(dir, 'instaladores')
       const archivos = (await readdir(out)).filter((f) => /\.(exe|dmg|AppImage|zip|deb)$/i.test(f))
       const lista = await Promise.all(archivos.map(async (f) => `- ${rel}/instaladores/${f} (${await tamanoLegible(path.join(out, f))})`))
+      let sitio = null
+      if (conf.sitio) {
+        await asegurarScriptsSitio(dir)
+        const s = await correr(process.execPath, [path.join(dir, 'scripts', 'armar-sitio.cjs'), '--desde', out, '--salida', path.join(dir, 'sitio'), ...(args?.notas ? ['--notas', args.notas] : [])], { cwd: dir, signal: exec.signal, timeoutMs: 5 * 60_000 })
+        sitio = s.codigo === 0 ? `✅ Sitio de descargas actualizado en ${rel}/sitio/: súbelo completo a ${conf.sitio} (reemplazando lo anterior). Las apps instaladas verán la versión nueva y avisarán.` : `⚠ No pude armar el sitio: ${finalDe(s.salida, 600)}`
+      }
       return [
         ...pasos,
         `✅ Instalador listo para ${process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'Mac' : 'Linux'}:`,
         ...lista,
         process.platform === 'win32' ? 'Al abrirlo, Windows puede mostrar "Windows protegió tu PC" porque no está firmado: Más información → Ejecutar de todas formas.' : '',
-        'Para Windows y Mac a la vez, con actualizaciones automáticas: escritorio_publicar.',
+        ...(sitio ? [sitio, process.platform === 'win32' ? 'Este sitio solo trae el instalador de Windows; para Mac hace falta compilar en un Mac o con escritorio_publicar (GitHub Actions).' : ''] : ['Para Windows y Mac a la vez: escritorio_publicar. Para que los clientes descarguen desde su propia página: escritorio_sitio.']),
       ].filter(Boolean).join('\n')
+    },
+  })
+
+  async function asegurarScriptsSitio(dir) {
+    await mkdir(path.join(dir, 'scripts'), { recursive: true })
+    for (const f of ['armar-sitio.cjs', 'pagina-descargas.html']) if (!existsSync(path.join(dir, 'scripts', f))) await cp(path.join(AQUI, 'plantilla', 'scripts', f), path.join(dir, 'scripts', f))
+  }
+
+  ctx.tools.register({
+    name: 'escritorio_sitio',
+    description: 'Configura la página web de descargas de la app en el dominio del cliente o en cualquier hosting (Netlify, Cloudflare Pages, Hostinger, su propio servidor): la app consulta esa dirección, AVISA cuando hay versión nueva y el botón abre la página para descargarla. Deja la página editable en escritorio/descargas/index.html y, tras empaquetar, la carpeta escritorio/sitio/ lista para subir completa.',
+    timeoutMs: 5 * 60_000,
+    parameters: {
+      type: 'object',
+      required: ['url'],
+      properties: {
+        carpeta: { type: 'string' },
+        url: { type: 'string', description: 'Dirección pública donde quedará la página, ej. https://descargas.textilesx.com/ o https://textilesx.netlify.app/' },
+        modo: { type: 'string', enum: ['aviso', 'automatica'], description: 'aviso (por defecto): avisa y abre la página para descargar · automatica: descarga sola e instala al cerrar.' },
+        descripcion: { type: 'string', description: 'Frase para la página, ej. "El sistema de producción de Textiles X".' },
+        color: { type: 'string', description: 'Color de la marca para el botón, ej. #c8102e' },
+      },
+    },
+    output: salida,
+    async execute(args, exec) {
+      const cwd = await ctx.workingDirectory.ensure(exec.agent, exec.signal)
+      const { dir, rel } = dirApp(cwd, args?.carpeta)
+      const conf = await leerConfig(dir)
+      if (!conf) return `No hay app de escritorio en ${rel}/. Créala con escritorio_crear.`
+      let url
+      try { url = new URL(String(args.url).trim()) } catch { return '❌ La dirección debe ser completa, ej. https://descargas.textilesx.com/' }
+      if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) return '❌ Usa https:// (las actualizaciones no se descargan por http sin cifrar).'
+      const base = url.href.endsWith('/') ? url.href : `${url.href}/`
+      const modo = args.modo === 'automatica' ? true : 'aviso'
+      const antes = conf.sitio
+      Object.assign(conf, { sitio: base, paginaVersiones: base, actualizaciones: modo })
+      if (args.descripcion) conf.descripcionSitio = args.descripcion
+      if (args.color) conf.colorSitio = args.color
+      delete conf.publicacion
+      await writeFile(path.join(dir, 'escritorio.config.json'), JSON.stringify(conf, null, 2) + '\n')
+      const archivoPkg = path.join(dir, 'package.json')
+      const pkg = JSON.parse(await readFile(archivoPkg, 'utf8'))
+      pkg.build.publish = [{ provider: 'generic', url: base }]
+      if (!pkg.build.files.includes('package.json')) pkg.build.files.push('package.json')
+      await writeFile(archivoPkg, JSON.stringify(pkg, null, 2) + '\n')
+      await asegurarScriptsSitio(dir)
+      const pagina = path.join(dir, 'descargas', 'index.html')
+      if (!existsSync(pagina)) { await mkdir(path.dirname(pagina), { recursive: true }); await cp(path.join(AQUI, 'plantilla', 'scripts', 'pagina-descargas.html'), pagina) }
+      if (args.color) { let h = await readFile(pagina, 'utf8'); h = h.replace(/--acento:#[0-9a-fA-F]{3,8}/, `--acento:${args.color}`); await writeFile(pagina, h) }
+      return [
+        `✅ La app buscará versiones nuevas en ${base} y ${modo === 'aviso' ? 'AVISARÁ ("Hay una versión nueva") con un botón que abre esa página para descargarla' : 'se actualizará sola al cerrarse'}.`,
+        `✅ Página editable: ${rel}/descargas/index.html (lee version.json: nombre, versión, novedades e instaladores).`,
+        ...(antes && antes !== base ? [`⚠ Cambió la dirección (antes ${antes}): las apps ya instaladas siguen buscando en la anterior hasta que instalen una versión hecha con la nueva.`] : []),
+        '',
+        'Cómo se publica cada versión (díselo al usuario):',
+        `1. escritorio_empaquetar { version: "1.0.1", notas: "Qué cambió" } → arma ${rel}/sitio/ con la página, version.json, los instaladores y latest*.yml.`,
+        `2. Subir TODO el contenido de ${rel}/sitio/ a ${base}, reemplazando lo anterior (Netlify: arrastrar la carpeta en "Deploys"; Hostinger/cPanel: Administrador de archivos; Cloudflare Pages: subir carpeta).`,
+        '3. Las apps instaladas lo detectan al abrir y cada 4 horas.',
+        'Importante: hay que empaquetar DESPUÉS de este paso (la dirección queda dentro del instalador). La primera versión que instalen los clientes ya debe traerla.',
+        'Para Windows y Mac a la vez sin un Mac: escritorio_publicar compila en GitHub Actions y deja el sitio listo como "sitio-de-descargas" para descargar y subir (o lo publica solo en Netlify si el repo tiene los secretos NETLIFY_AUTH_TOKEN y NETLIFY_SITE_ID).',
+      ].join('\n')
     },
   })
 
@@ -886,7 +980,8 @@ export function apply(ctx, rawConfig) {
       const flujo = path.join(raiz, '.github', 'workflows', 'escritorio.yml')
       await mkdir(path.dirname(flujo), { recursive: true })
       let paginaRel = null, visibilidad = null
-      if (args?.pagina !== false && gh) {
+      if (conf.sitio) await asegurarScriptsSitio(dir)
+      if (args?.pagina !== false && gh && !conf.sitio) {
         const carpetaPagina = path.join(dir, 'descargas')
         await mkdir(carpetaPagina, { recursive: true })
         await writeFile(path.join(carpetaPagina, 'index.html'), paginaDescargas({ nombre: conf.nombre, owner: gh.owner, repo: gh.repo, color: conf.color || '#0a66ff', descripcion: args?.descripcion || '' }))
@@ -894,8 +989,8 @@ export function apply(ctx, rawConfig) {
         paginaRel = path.relative(raiz, carpetaPagina).split(path.sep).join('/')
         try { const r = await fetch(`https://api.github.com/repos/${gh.owner}/${gh.repo}`, { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'dsh-escritorio' } }); visibilidad = r.ok ? ((await r.json()).private ? 'privado' : 'público') : r.status === 404 ? 'privado' : null } catch {}
       }
-      await writeFile(flujo, flujoGithub({ dirRel, webDirRel: webConDeps, nombre: conf.nombre, paginaRel }))
-      if (gh) {
+      await writeFile(flujo, flujoGithub({ dirRel, webDirRel: webConDeps, nombre: conf.nombre, paginaRel, sitio: conf.sitio || null }))
+      if (gh && !conf.sitio) {
         const pkg = JSON.parse(await readFile(path.join(dir, 'package.json'), 'utf8'))
         pkg.build.publish = [{ provider: 'github', owner: gh.owner, repo: gh.repo, releaseType: 'release' }]
         await writeFile(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n')
@@ -915,6 +1010,11 @@ export function apply(ctx, rawConfig) {
         `Luego, en github.com/${gh ? `${gh.owner}/${gh.repo}` : '<usuario>/<repo>'}/actions se ve la compilación (unos 10 minutos) y los instaladores quedan en Releases. Para una prueba sin publicar: pestaña Actions → Escritorio → Run workflow.`,
         'Actualizaciones: Windows y Linux se actualizan solos (descargan en segundo plano e instalan al cerrar o con "Reiniciar y actualizar" en la bandeja). Mac sin certificado de Apple avisa y abre la descarga; con certificado (Developer ID) se pone "macFirmada": true y también se actualiza solo.',
         'Cada versión nueva necesita un número mayor: escritorio-v1.0.1, escritorio-v1.1.0…',
+        ...(conf.sitio ? [
+          '',
+          `Sitio del cliente (${conf.sitio}): cada versión publicada deja en esa ejecución de Actions el artefacto "sitio-de-descargas" (página + instaladores de Windows, Mac y Linux + latest*.yml). Se descarga y se sube completo al hosting del cliente.`,
+          'Para que se publique solo en Netlify: agrega en el repo los secretos NETLIFY_AUTH_TOKEN y NETLIFY_SITE_ID (Settings → Secrets and variables → Actions). El repositorio puede ser privado: los clientes solo ven su página.',
+        ] : []),
         ...(paginaRel ? [
           '',
           `Página de descargas: ${paginaRel}/index.html → se publica en https://${gh.owner.toLowerCase()}.github.io/${gh.repo}/ con cada versión. Detecta Windows/Mac/Linux y siempre baja la última versión.`,
