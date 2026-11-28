@@ -1,10 +1,10 @@
 {
   "name": "dsh-escritorio",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Convierte la interfaz del proyecto en una app de escritorio para Windows y Mac (Electron): bandeja, atajo global, archivos del PC, notificaciones, actualizaciones; la prueba abriéndola de verdad, crea el instalador y compila Windows y Mac en GitHub Actions",
   "type": "module",
   "main": "index.js",
-  "files": ["index.js", "plantilla", "web", "cordis.patch.yml", "README.md"],
+  "files": ["index.js", "tablas.js", "plantilla", "web", "cordis.patch.yml", "README.md"],
   "keywords": ["dsh-plugin", "deepseek-harness", "electron", "escritorio", "windows", "mac", "instalador"],
   "author": "Carlos Cárdenas",
   "license": "MIT",

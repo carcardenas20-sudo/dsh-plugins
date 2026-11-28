@@ -60,6 +60,13 @@ r = await tools.escritorio_datos.execute({ url: 'https://abcd.supabase.co/', cla
 assert.match(r, /conectada[^]*datos-en-vivo\.js[^]*row level security[^]*supabase_realtime/i)
 assert.deepEqual(JSON.parse(await readFile(path.join(cwd, 'escritorio/escritorio.config.json'), 'utf8')).supabase, { url: 'https://abcd.supabase.co', clave: jwt('anon') })
 assert.match(await readFile(path.join(cwd, 'lib/datos-en-vivo.js'), 'utf8'), /export function crearDatos/)
+assert.match(await readFile(path.join(cwd, 'lib/escritorio-ui.js'), 'utf8'), /customElements\.define/)
+assert.match(await readFile(path.join(cwd, 'lib/datos.js'), 'utf8'), /crearDatos\(\{ url: "https:\/\/abcd\.supabase\.co"[^]*conectarUI/)
+r = await tools.escritorio_datos.execute({ instalar: false, tablas: [{ nombre: 'Pagos', acceso: 'por-columna', columnas: [{ nombre: 'valor', tipo: 'dinero', requerido: true }, { nombre: 'sede', opciones: ['Norte', 'Sur'] }] }] }, {})
+assert.match(r, /supabase\/escritorio\.sql: pagos \+ perfiles \(rol admin\/usuario, sede\)[^]*SQL Editor[^]*Add user/)
+const sqlGen = await readFile(path.join(cwd, 'supabase/escritorio.sql'), 'utf8')
+assert.match(sqlGen, /enable row level security[^]*mi_sede\(\)[^]*supabase_realtime add table public\.pagos/)
+assert.match(await tools.escritorio_datos.execute({ instalar: false, tablas: [{ nombre: 'x', columnas: [{ nombre: 'id' }] }] }, {}), /❌ Tablas: .*la agrega el plugin/)
 
 cwd = path.join(base, 'nueva'); await mkdir(cwd)
 r = await tools.escritorio_crear.execute({ nombre: 'Notas', bandeja: false }, {})

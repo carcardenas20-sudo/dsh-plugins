@@ -5,6 +5,10 @@
 //   const parar = datos.enVivo('pagos', { filtro: { sede: 'Norte' }, orden: 'creado' }, (filas, info) => pintar(filas))
 //   await datos.guardar('pagos', { documento: '1023', saldo: 50000 })   // sin internet: queda en cola y se envía al volver
 //
+// Sesión y conexión (la pantalla lista está en escritorio-ui.js):
+//   await datos.sesion.entrar('correo@x.co', 'clave') · datos.sesion.salir() · datos.sesion.alCambiar((usuario, perfil) => …)
+//   datos.alCambiarConexion(({ estado: 'en-linea' | 'sin-conexion' | 'reconectando', pendientes }) => …)
+//
 // En React:
 //   useEffect(() => datos.enVivo('pagos', {}, (filas) => setPagos(filas)), [])
 //
@@ -82,10 +86,64 @@ export function crearDatos({ url, clave, opciones = {} }) {
     return () => { vivo = false; cliente.removeChannel(canal); if (disponible) window.removeEventListener('online', alVolver) }
   }
 
+  // ---------- sesión ----------
+  let usuario = null, perfil = null
+  const oyentesSesion = new Set()
+  const avisarSesion = () => oyentesSesion.forEach((fn) => fn(usuario, perfil))
+  async function cargarPerfil() {
+    if (!usuario) { perfil = null; return }
+    const { data } = await cliente.from('perfiles').select('*').eq('id', usuario.id).maybeSingle()
+    perfil = data || null
+    if (perfil) almacen.guardar(`${prefijo}perfil`, perfil)
+  }
+  const errorEnEspanol = (e) => {
+    const m = String(e?.message || e)
+    if (/Invalid login credentials/i.test(m)) return 'Correo o clave incorrectos.'
+    if (/Email not confirmed/i.test(m)) return 'Falta confirmar el correo: revisa tu bandeja de entrada.'
+    if (/rate limit|too many/i.test(m)) return 'Demasiados intentos. Espera un momento y vuelve a intentar.'
+    if (esErrorDeRed(e)) return 'Sin conexión a internet.'
+    return m
+  }
+  cliente.auth.getSession().then(async ({ data }) => {
+    usuario = data.session?.user || null
+    perfil = usuario ? almacen.leer(`${prefijo}perfil`, null) : null
+    avisarSesion(); await cargarPerfil().catch(() => {}); avisarSesion()
+  })
+  cliente.auth.onAuthStateChange((evento, s) => {
+    const antes = usuario?.id
+    usuario = s?.user || null
+    if (usuario?.id !== antes || evento === 'USER_UPDATED') setTimeout(async () => { await cargarPerfil().catch(() => {}); avisarSesion() }, 0)
+    else avisarSesion()
+  })
+  const sesion = {
+    /** { ok, error? } con mensajes en español */
+    async entrar(correo, clave) { const { error } = await cliente.auth.signInWithPassword({ email: String(correo).trim(), password: clave }); return error ? { ok: false, error: errorEnEspanol(error) } : { ok: true } },
+    async salir() { await cliente.auth.signOut(); almacen.guardar(`${prefijo}perfil`, null) },
+    async recuperar(correo) { const { error } = await cliente.auth.resetPasswordForEmail(String(correo).trim()); return error ? { ok: false, error: errorEnEspanol(error) } : { ok: true } },
+    async registrar(correo, clave, nombre) { const { error } = await cliente.auth.signUp({ email: String(correo).trim(), password: clave, options: { data: { nombre } } }); return error ? { ok: false, error: errorEnEspanol(error) } : { ok: true } },
+    usuario: () => usuario,
+    perfil: () => perfil,
+    esAdmin: () => perfil?.rol === 'admin',
+    alCambiar: (fn) => { oyentesSesion.add(fn); fn(usuario, perfil); return () => oyentesSesion.delete(fn) },
+  }
+
+  // ---------- conexión ----------
+  let estadoCanal = 'reconectando'
+  const oyentesConexion = new Set()
+  const conexion = () => ({ estado: disponible && !navigator.onLine ? 'sin-conexion' : estadoCanal === 'SUBSCRIBED' ? 'en-linea' : estadoCanal === 'reconectando' ? 'reconectando' : 'sin-conexion', pendientes: leerCola().length })
+  const avisarConexion = () => { const c = conexion(); oyentesConexion.forEach((fn) => fn(c)) }
+  // canal propio solo para saber si el tiempo real está conectado
+  cliente.channel(`conexion:${Math.random().toString(36).slice(2)}`).subscribe((estado) => {
+    estadoCanal = estado === 'SUBSCRIBED' ? 'SUBSCRIBED' : estado === 'CLOSED' || estado === 'CHANNEL_ERROR' || estado === 'TIMED_OUT' ? 'reconectando' : estadoCanal
+    avisarConexion()
+    if (estado === 'SUBSCRIBED') vaciarCola()
+  })
+  if (disponible) { window.addEventListener('online', avisarConexion); window.addEventListener('offline', avisarConexion) }
+
   // ---------- escrituras con cola sin internet ----------
   const llaveCola = `${prefijo}cola`
   const leerCola = () => almacen.leer(llaveCola, [])
-  const avisarCola = () => { const n = leerCola().length; oyentesCola.forEach((fn) => fn(n)) }
+  const avisarCola = () => { const n = leerCola().length; oyentesCola.forEach((fn) => fn(n)); avisarConexion() }
 
   async function aplicar(op) {
     if (op.tipo === 'guardar') return cliente.from(op.tabla).upsert(op.fila, { onConflict: op.id }).select()
@@ -127,5 +185,8 @@ export function crearDatos({ url, clave, opciones = {} }) {
     pendientes: () => leerCola().length,
     alCambiarPendientes: (fn) => { oyentesCola.add(fn); fn(leerCola().length); return () => oyentesCola.delete(fn) },
     sincronizar: vaciarCola,
+    sesion,
+    conexion,
+    alCambiarConexion: (fn) => { oyentesConexion.add(fn); fn(conexion()); return () => oyentesConexion.delete(fn) },
   }
 }

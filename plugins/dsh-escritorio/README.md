@@ -37,17 +37,46 @@ Qué decirle a DeepSeek:
 
 > Cuando llegue un Excel a la carpeta Entrada, valídalo, súbelo a la tabla matriculas y mueve el archivo a Procesados.
 
-## Datos en tiempo real
+## Varios equipos con datos en tiempo real
 
-`escritorio_datos` conecta Supabase (solo con la clave pública; rechaza las secretas). Las automatizaciones usan `ctx.db` y pueden reaccionar a cambios de tablas. En la interfaz queda `src/lib/datos-en-vivo.js`:
+Pensado para una app instalada en varios PCs (por ejemplo 4 sedes) que comparten la misma información al instante. Usa Supabase.
 
-```js
-const datos = crearDatos({ url, clave })
-datos.enVivo('pagos', { filtro: { sede: 'Norte' } }, (filas) => pintar(filas)) // se actualiza solo en todos los PCs
-await datos.guardar('pagos', fila) // sin internet queda en cola y se envía al volver
+Qué decirle a DeepSeek:
+
+> Conecta la app a Supabase (url y clave pública) con las tablas aprendices y pagos. Cada sede ve solo lo suyo y el administrador ve todo.
+
+`escritorio_datos` hace esto:
+
+- **Tablas con permisos por fila.** Genera `supabase/escritorio.sql` con cada tabla y sus columnas automáticas (id, quién la creó, creada, actualizada). El acceso puede ser:
+  - `autenticados`: cualquiera con sesión.
+  - `propietario`: cada quien sus filas.
+  - `por-columna`: cada sede o área ve solo lo suyo, según su perfil.
+  - `solo-lectura`: todos leen y solo el administrador escribe.
+- **Perfiles de usuario.** Crea la tabla `perfiles` con rol (admin o usuario) y sede. Se llena sola al crear cada usuario, y nadie puede subirse de rol.
+- **Tiempo real** activado en las tablas. El SQL se puede correr varias veces sin romper nada, y si cambias el acceso de una tabla no deja reglas viejas abiertas.
+- **Aplicar el SQL:** si el PC tiene la variable `SUPABASE_ACCESS_TOKEN`, lo aplica solo. Si no, se pega en Supabase → SQL Editor.
+- **En la interfaz** quedan:
+  - `src/lib/datos.js`: la conexión única de la app.
+  - `datos-en-vivo.js`: lecturas en vivo, copia local, cola sin internet y sesión.
+  - `escritorio-ui.js`: tres componentes listos, que funcionan con React, Vue o HTML:
+
+```html
+<acceso-escritorio>   <!-- pantalla de inicio de sesión hasta que haya sesión -->
+  <header> … <estado-conexion></estado-conexion> <usuario-escritorio></usuario-escritorio> </header>
+  … tu app …
+</acceso-escritorio>
 ```
 
-Lo que cada usuario puede ver o cambiar lo deciden las políticas de Row Level Security en Supabase.
+```js
+import { datos } from './lib/datos.js'
+datos.enVivo('pagos', { orden: 'fecha' }, (filas) => pintar(filas)) // se actualiza solo en todos los PCs
+await datos.guardar('pagos', fila)  // sin internet queda en cola y se sube al volver
+datos.sesion.perfil()               // { rol, sede, … }
+```
+
+El indicador muestra "En línea", "Sin conexión · 3 cambios por subir" o "Reconectando…".
+
+**Seguridad:** dentro de la app solo va la clave pública. Lo que cada quien puede ver o cambiar lo deciden los permisos en la base de datos. Nunca metas en una app instalable una cadena de conexión directa a Postgres (Neon, o la clave de la base de Supabase), porque cualquiera la saca del instalador.
 
 ## Herramientas
 
@@ -56,7 +85,7 @@ Lo que cada usuario puede ver o cambiar lo deciden las políticas de Row Level S
 | `escritorio_crear` | Crea la app en `escritorio/` con nombre, ícono, bandeja y atajo. |
 | `escritorio_probar` | Instala lo necesario, abre la app de verdad, verifica errores, puente, bandeja y atajo, ejecuta las automatizaciones una vez y devuelve resultados, registros, fotos de los robots y capturas en claro y oscuro. |
 | `escritorio_automatizacion` | Crea una automatización (robot, horario, carpeta, tabla…) validando el disparador y el código. |
-| `escritorio_datos` | Conecta Supabase con tiempo real para las automatizaciones y la interfaz. |
+| `escritorio_datos` | Conecta Supabase para varios equipos: tablas con permisos por fila, perfiles con rol y sede, tiempo real, inicio de sesión, usuario y estado de conexión. |
 | `escritorio_empaquetar` | Crea el instalador para tu computador (`.exe` en Windows, `.dmg` en Mac, `.AppImage` en Linux). |
 | `escritorio_publicar` | Escribe el flujo de GitHub Actions que compila Windows, Mac y Linux a la vez y publica versiones. No sube nada sin tu aprobación. |
 
@@ -99,5 +128,5 @@ Compila Windows, Mac y Linux, y publica solo si los tres salen bien. Las apps in
 Harness Desktop: **solo desde la app**, en Plugins → Add plugin:
 
 ```
-https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.3.0.tgz
+https://raw.githubusercontent.com/carcardenas20-sudo/dsh-plugins/main/paquetes/dsh-escritorio-0.4.0.tgz
 ```

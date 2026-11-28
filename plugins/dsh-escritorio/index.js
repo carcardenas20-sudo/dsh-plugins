@@ -13,6 +13,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import vm from 'node:vm'
+import { ACCESOS, sqlDeTablas } from './tablas.js'
 
 export const name = 'escritorio'
 export const inject = ['tools', 'workingDirectory', 'systemPrompt']
@@ -244,8 +245,9 @@ const REGLAS = [
   'Robots: const p = await robot({ sesion?: "nombre", visible?: false, espera?: 30000 }) returns a Playwright Page using the browser already on the PC (Edge on Windows, Chrome on Mac/Linux; nothing to download). Use role/label locators (getByRole, getByLabel, getByText), never brittle CSS chains; wait for content before reading. p.descargar(() => click) saves a download and returns its path; p.captura("nombre") saves a screenshot shown in the panel. Errors automatically save a screenshot of every open page. A named sesion keeps cookies/logins between runs: prefer a one-time visible login (robot({sesion, visible:true}) and wait for the logged-in page) over storing passwords; if credentials are unavoidable put them in "variables", never in code, and tell the user they live inside the installed app.',
   'Each run happens in a separate process with a time limit, so a stuck robot never freezes the app. History (result, logs, screenshots) lives in the panel: tray → Automatizaciones, or window.escritorio.automatizaciones.abrirPanel(). From the UI: automatizaciones.lista/ejecutar(id, datos)/activar(id, bool)/cancelar/historial/alCambiar.',
   '',
-  '### Real-time data',
-  'escritorio_datos connects Supabase (url + public anon/publishable key only; it refuses service_role/secret keys) for both automations (ctx.db, {tabla} triggers) and the UI (it writes src/lib/datos-en-vivo.js: crearDatos({url, clave}).enVivo(tabla, opciones, alCambiar) with live updates and an offline cache, and guardar() that queues writes while offline). Remind the user to enable Row Level Security with policies, and to add tables to the supabase_realtime publication.',
+  '### Real-time data for several PCs',
+  'For an app used on several computers with live shared data, use escritorio_datos with Supabase (url + public anon/publishable key only; it refuses service_role/secret keys). Pass "tablas" so it generates supabase/escritorio.sql: tables with id/creado_por/creado/actualizado, row-level security by "acceso" (autenticados · propietario · por-columna, e.g. each PC/sede sees only its rows · solo-lectura), a perfiles table with rol admin/usuario and the access column, and realtime enabled. With aplicar:true and SUPABASE_ACCESS_TOKEN on the PC it runs the SQL; otherwise tell the user to paste it in the SQL Editor, create one user per person/PC, and set the admin and each user\'s sede with the commented lines.',
+  'In the UI: import src/lib/datos.js once; wrap the whole app in <acceso-escritorio> (login screen until there is a session), put <estado-conexion> and <usuario-escritorio> in the top bar, read with datos.enVivo(tabla, {filtro, orden}, setFilas) and write with datos.guardar/borrar (queued while offline). Never put a Postgres connection string (Neon, Supabase DB password) inside an installed app: anyone can extract it; use Supabase with RLS, or an API server in between.',
 ].join('\n')
 
 // ---------- procesos ----------
@@ -572,15 +574,41 @@ export function apply(ctx, rawConfig) {
 
   ctx.tools.register({
     name: 'escritorio_datos',
-    description: 'Conecta la app de escritorio (automatizaciones e interfaz) a Supabase con tiempo real: guarda url y clave pública en la configuración y escribe en el proyecto web src/lib/datos-en-vivo.js (lecturas en vivo, copia local sin internet y cola de escrituras). Rechaza claves secretas.',
+    description: 'Conecta la app de escritorio (automatizaciones e interfaz) a Supabase con tiempo real para varios equipos a la vez: guarda url y clave pública, genera el SQL de las tablas con permisos por fila (todos con sesión, cada quien lo suyo, por sede/área según el perfil, o solo lectura), perfiles con rol admin/usuario y tiempo real activado; copia al proyecto web datos-en-vivo.js (lecturas en vivo, copia local, cola sin internet, sesión) y escritorio-ui.js (pantalla de inicio de sesión, usuario y estado de conexión). Puede aplicar el SQL en Supabase si el PC tiene SUPABASE_ACCESS_TOKEN. Rechaza claves secretas.',
     timeoutMs: 10 * 60_000,
     parameters: {
       type: 'object',
-      required: ['url', 'clave'],
       properties: {
         carpeta: { type: 'string' },
-        url: { type: 'string', description: 'URL del proyecto, ej. https://abcd.supabase.co' },
+        url: { type: 'string', description: 'URL del proyecto, ej. https://abcd.supabase.co (no hace falta si ya está configurada).' },
         clave: { type: 'string', description: 'Clave PÚBLICA: anon o publishable (sb_publishable_…). Nunca service_role ni sb_secret_.' },
+        tablas: {
+          type: 'array',
+          description: 'Tablas a crear o completar. Se agregan solas: id, creado_por, creado, actualizado.',
+          items: {
+            type: 'object',
+            required: ['nombre', 'columnas'],
+            properties: {
+              nombre: { type: 'string' },
+              acceso: { type: 'string', enum: ACCESOS, description: 'autenticados: cualquiera con sesión · propietario: cada quien sus filas (admin todo) · por-columna: filas de su sede/área según su perfil (admin todo) · solo-lectura: todos leen, solo admin escribe.' },
+              columnaAcceso: { type: 'string', description: 'Con por-columna: la columna que se compara con el perfil (por defecto "sede").' },
+              columnas: {
+                type: 'array',
+                items: {
+                  type: 'object', required: ['nombre'],
+                  properties: {
+                    nombre: { type: 'string' }, tipo: { type: 'string', enum: ['texto', 'numero', 'entero', 'dinero', 'fecha', 'fechahora', 'booleano', 'json', 'uuid', 'correo', 'telefono'] },
+                    requerido: { type: 'boolean' }, unico: { type: 'boolean' }, defecto: { description: 'Valor por defecto; "ahora" para fechas.' },
+                    referencia: { type: 'string', description: 'Otra tabla de esta lista a la que apunta.' }, opciones: { type: 'array', items: { type: 'string' }, description: 'Valores permitidos.' },
+                  },
+                },
+              },
+            },
+          },
+        },
+        aplicar: { type: 'boolean', description: 'true para ejecutar el SQL en Supabase ahora (necesita la variable SUPABASE_ACCESS_TOKEN en el PC). Si no, queda el archivo para pegarlo en el SQL Editor.' },
+        titulo: { type: 'string', description: 'Título de la pantalla de inicio de sesión (por defecto el nombre de la app).' },
+        registro: { type: 'boolean', description: 'true para permitir que la gente cree su propia cuenta (por defecto solo entra quien el admin crea).' },
         instalar: { type: 'boolean', description: 'Instala @supabase/supabase-js en el proyecto web (por defecto true).' },
       },
     },
@@ -590,8 +618,9 @@ export function apply(ctx, rawConfig) {
       const { dir, rel } = dirApp(cwd, args?.carpeta)
       const conf = await leerConfig(dir)
       if (!conf) return `No hay app de escritorio en ${rel}/. Créala primero con escritorio_crear.`
-      const url = String(args.url || '').trim().replace(/\/+$/, '')
-      const clave = String(args.clave || '').trim()
+      const url = String(args.url || conf.supabase?.url || '').trim().replace(/\/+$/, '')
+      const clave = String(args.clave || conf.supabase?.clave || '').trim()
+      if (!url || !clave) return '❌ Falta url y clave de Supabase (Project Settings → API).'
       if (!/^https:\/\/[^\s/]+$/.test(url)) return '❌ La URL debe ser como https://abcd.supabase.co'
       if (/^sb_secret_/.test(clave)) return '❌ Esa es una clave SECRETA (sb_secret_…): no puede ir dentro de una app que se instala. Usa la publishable (sb_publishable_…) o la anon.'
       try {
@@ -599,28 +628,75 @@ export function apply(ctx, rawConfig) {
         if (carga.role === 'service_role') return '❌ Esa es la clave service_role: salta todos los permisos y cualquiera podría sacarla del instalador. Usa la clave anon (pública) y protege las tablas con Row Level Security.'
       } catch {}
       if (!/^sb_publishable_/.test(clave) && clave.split('.').length !== 3) return '❌ No parece una clave de Supabase. Cópiala de Project Settings → API (anon / publishable).'
+
+      let sql = null
+      if (args.tablas) { try { sql = sqlDeTablas(args.tablas) } catch (e) { return `❌ Tablas: ${e.message}` } }
+
       conf.supabase = { url, clave }
       await writeFile(path.join(dir, 'escritorio.config.json'), JSON.stringify(conf, null, 2) + '\n')
       const pasos = [`✅ ${rel}/escritorio.config.json: base de datos conectada para las automatizaciones (ctx.db y disparadores { tabla }).`]
       const mejora = await asegurarMotor(dir).catch(() => null)
       if (mejora) pasos.push(mejora)
+
       const web = conf.web?.carpeta ? path.resolve(dir, conf.web.carpeta) : null
       if (web && existsSync(path.join(web, 'package.json'))) {
-        const destino = path.join(web, existsSync(path.join(web, 'src')) ? 'src/lib' : 'lib', 'datos-en-vivo.js')
-        await mkdir(path.dirname(destino), { recursive: true })
-        await cp(path.join(AQUI, 'web', 'datos-en-vivo.js'), destino)
-        pasos.push(`✅ ${path.relative(cwd, destino).split(path.sep).join('/')}: crearDatos({ url, clave }) → enVivo(tabla, opciones, alCambiar), guardar(tabla, fila), borrar(tabla, id).`)
+        const carpetaLib = path.join(web, existsSync(path.join(web, 'src')) ? 'src/lib' : 'lib')
+        await mkdir(carpetaLib, { recursive: true })
+        await cp(path.join(AQUI, 'web', 'datos-en-vivo.js'), path.join(carpetaLib, 'datos-en-vivo.js'))
+        await cp(path.join(AQUI, 'web', 'escritorio-ui.js'), path.join(carpetaLib, 'escritorio-ui.js'))
+        const relLib = path.relative(cwd, carpetaLib).split(path.sep).join('/')
+        const archivoDatos = path.join(carpetaLib, 'datos.js')
+        if (!existsSync(archivoDatos)) {
+          await writeFile(archivoDatos, [
+            '// Conexión única de la app a la base de datos (generado por dsh-escritorio).',
+            "import { crearDatos } from './datos-en-vivo.js'",
+            "import { conectarUI } from './escritorio-ui.js'",
+            '',
+            '// Clave PÚBLICA: lo que cada usuario ve lo deciden los permisos por fila en Supabase.',
+            `export const datos = crearDatos({ url: ${JSON.stringify(url)}, clave: ${JSON.stringify(clave)} })`,
+            `conectarUI(datos, { titulo: ${JSON.stringify(args.titulo || conf.nombre || 'Bienvenido')}, subtitulo: 'Inicia sesión para continuar', registro: ${args.registro === true} })`,
+            '',
+          ].join('\n'))
+        }
+        pasos.push(
+          `✅ ${relLib}/datos.js (importa esto una vez, al inicio de la app), datos-en-vivo.js y escritorio-ui.js:`,
+          '   - Envuelve TODA la interfaz en <acceso-escritorio>…</acceso-escritorio>: muestra el inicio de sesión hasta que haya sesión.',
+          '   - Pon <estado-conexion></estado-conexion> y <usuario-escritorio></usuario-escritorio> en la barra superior.',
+          "   - Lee y escribe con datos.enVivo('tabla', opciones, (filas) => …) y datos.guardar('tabla', fila); en React: useEffect(() => datos.enVivo('pagos', {}, setPagos), []).",
+          '   - datos.sesion.perfil() trae rol y sede; datos.sesion.esAdmin() para mostrar u ocultar opciones de administrador.',
+        )
         if (args.instalar !== false) {
           const r = await correr(npm, ['install', '--no-audit', '--no-fund', `@supabase/supabase-js@${VERSIONES.supabase}`], { cwd: web, signal: exec.signal, timeoutMs: 8 * 60_000 })
           pasos.push(r.codigo === 0 ? '✅ @supabase/supabase-js instalado en el proyecto web.' : `⚠ No pude instalar @supabase/supabase-js: ${finalDe(r.salida, 600)}`)
         }
-      } else pasos.push('La interfaz no es un proyecto web compilado: el archivo de datos en vivo no se copió.')
-      pasos.push(
-        'Falta en Supabase (díselo al usuario, con el SQL):',
-        '1. Activar Row Level Security en cada tabla y crear políticas (ej. solo usuarios con sesión): alter table pagos enable row level security; create policy "con sesión" on pagos for all to authenticated using (true) with check (true);',
-        '2. Activar tiempo real en las tablas que se escuchan: alter publication supabase_realtime add table pagos;',
-        'En la interfaz, tras iniciar sesión con supabase.auth, las automatizaciones reciben la sesión solas (crearDatos la pasa a window.escritorio.automatizaciones.sesion).',
-      )
+      } else pasos.push('La interfaz no es un proyecto web compilado: los archivos de datos y de inicio de sesión no se copiaron.')
+
+      if (sql) {
+        const archivoSql = path.join(cwd, 'supabase', 'escritorio.sql')
+        await mkdir(path.dirname(archivoSql), { recursive: true })
+        await writeFile(archivoSql, sql.sql)
+        const relSql = path.relative(cwd, archivoSql).split(path.sep).join('/')
+        pasos.push(`✅ ${relSql}: ${sql.tablas.join(', ')} + perfiles (rol admin/usuario${sql.columnasPerfil.length ? `, ${sql.columnasPerfil.join(', ')}` : ''}), permisos por fila y tiempo real.`)
+        const token = process.env.SUPABASE_ACCESS_TOKEN
+        const ref = new URL(url).hostname.split('.')[0]
+        if (args.aplicar && token && /\.supabase\.co$/.test(new URL(url).hostname)) {
+          try {
+            const r = await fetch(`https://api.supabase.com/v1/projects/${ref}/database/query`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ query: sql.sql }), signal: exec.signal })
+            const cuerpo = await r.text()
+            pasos.push(r.ok ? '✅ SQL aplicado en Supabase.' : `❌ Supabase rechazó el SQL (${r.status}): ${cuerpo.slice(0, 600)}`)
+          } catch (e) { pasos.push(`❌ No pude aplicar el SQL: ${e.message}. Pégalo a mano en el SQL Editor.`) }
+        } else {
+          pasos.push(`Falta aplicarlo: ${args.aplicar ? 'no hay SUPABASE_ACCESS_TOKEN en este PC, así que ' : ''}abre Supabase → SQL Editor, pega ${relSql} y dale Run (se puede repetir sin problema).`)
+        }
+        pasos.push(
+          'Después, díselo al usuario paso a paso:',
+          '1. Authentication → Users → Add user: crea un usuario por persona o equipo (correo y clave).',
+          `2. Corre las dos líneas comentadas al final del SQL para nombrar el administrador${sql.columnasPerfil.length ? ` y asignar ${sql.columnasPerfil.join(', ')} a cada usuario` : ''}.`,
+          ...(args.registro ? [] : ['3. Authentication → Sign In / Providers: desactiva "Allow new users to sign up" para que solo entren los usuarios creados.']),
+        )
+      } else {
+        pasos.push('Sin "tablas": si las tablas ya existen, verifica que tengan Row Level Security con políticas y estén en la publicación supabase_realtime. Pasa "tablas" para que genere ese SQL.')
+      }
       return pasos.join('\n')
     },
   })
