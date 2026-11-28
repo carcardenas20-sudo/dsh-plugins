@@ -27,7 +27,25 @@ document.getElementById('avisar').onclick=()=>e.notificar('${o.nombre}','Las not
 </script></body></html>
 `
 
-export const LEEME = (o) => `# ${o.nombre} — app de escritorio
+const LEEME_OTRAS = (o) => `# ${o.nombre} — app de escritorio (${o.tecnologia === 'tauri' ? 'Tauri / Rust' : 'JavaFX / Java'})
+
+Generada con dsh-escritorio. Misma interfaz (\`app/\`), automatizaciones (\`automatizaciones/\`) y \`window.escritorio\` que la versión Electron.
+
+| Comando (en esta carpeta) | Qué hace |
+|---|---|
+| \`npm install\` | Una sola vez: herramientas${o.tecnologia === 'tauri' ? ' (la CLI de Tauri)' : ''} y dependencias del motor. |
+| \`npm run probar\` | ${o.tecnologia === 'tauri' ? 'Compila con Rust (la primera vez tarda) y deja el programa en src-tauri/target/debug/.' : 'Compila con el JDK y abre la app en modo prueba.'} |
+| \`npm run empaquetar\` | Crea el instalador de este sistema${o.tecnologia === 'tauri' ? ' en src-tauri/target/release/bundle/' : ' en paquete/instaladores/'}. |
+
+Requisitos para compilar en el PC: ${o.tecnologia === 'tauri' ? 'Rust (rustup) y, en Windows, las herramientas de C++ de Visual Studio' : 'JDK 21 o más nuevo; para el .exe de Windows, WiX 3'}. Sin instalar nada: el flujo de GitHub Actions (escritorio_publicar) compila Windows, Mac y Linux.
+
+- Código del programa: ${o.tecnologia === 'tauri' ? '`src-tauri/src/main.rs`' : '`src/main/java/escritorio/`'}. Ajustes: \`escritorio.config.json\`. Ícono: \`build/icono.svg\`.
+- Si hay automatizaciones, el instalador lleva el Node que las corre (unos 40 MB más en el instalador). Sin automatizaciones no lo lleva.
+- Las actualizaciones son con aviso: la app consulta \`version.json\` de la página de descargas y abre la página para descargar.
+- Windows muestra "Windows protegió tu PC" la primera vez porque el instalador no está firmado: "Más información" → "Ejecutar de todas formas".
+`
+
+export const LEEME = (o) => o.tecnologia && o.tecnologia !== 'electron' ? LEEME_OTRAS(o) : `# ${o.nombre} — app de escritorio
 
 Generada con dsh-escritorio (Electron ${VERSIONES.electron}).
 
@@ -49,6 +67,7 @@ export const REGLAS = [
   '1. escritorio_crear wraps the project UI (Vite/React build, a static folder, a deployed URL, or a new starter page). For Vite it builds with base "./" automatically.',
   '2. In the UI, desktop features go through window.escritorio (archivos.abrir/guardar/mostrar, notificar, abrirEnNavegador, info, iniciarConSistema); always guard with `if (window.escritorio)` so the web version keeps working, with a browser fallback (download/upload).',
   '3. Always run escritorio_probar after creating or changing it: it really opens the app, checks errors, the bridge, tray and shortcut, and returns light/dark screenshots. Look at them and fix problems before saying it works.',
+  'Technology: escritorio_crear { tecnologia } = electron (default, most tested), tauri (Rust, much lighter installer, uses the system WebView) or java (JavaFX). Use tauri or java only when the user asks for Rust/Tauri or Java. All three share app/ (web UI), automatizaciones/, motor/, window.escritorio, datos-en-vivo and the client download page; tauri/java updates are always notice-only and have no global shortcut. Compiling tauri needs Rust (and VS C++ tools on Windows), java needs JDK 21; if missing, escritorio_probar explains how to install them, and escritorio_publicar builds everything on GitHub Actions. Do not hand-edit src-tauri/ or src/main/java unless asked: the web UI and automations are where app features go.',
   '4. escritorio_empaquetar builds the installer for this computer. For Windows and Mac together and auto-updates, escritorio_publicar writes the GitHub Actions workflow; never push, tag or publish without the user\'s explicit approval.',
   '5. Be honest about signing: unsigned installers show a warning the first time on Windows (SmartScreen) and Mac (Gatekeeper).',
   '',
@@ -63,6 +82,7 @@ export const REGLAS = [
   '### Real-time data for several PCs',
   'For an app used on several computers with live shared data, use escritorio_datos with Supabase (url + public anon/publishable key only; it refuses service_role/secret keys). Pass "tablas" so it generates supabase/escritorio.sql: tables with id/creado_por/creado/actualizado, row-level security by "acceso" (autenticados · propietario · por-columna, e.g. each PC/sede sees only its rows · solo-lectura), a perfiles table with rol admin/usuario and the access column, and realtime enabled. With aplicar:true and SUPABASE_ACCESS_TOKEN on the PC it runs the SQL; otherwise tell the user to paste it in the SQL Editor, create one user per person/PC, and set the admin and each user\'s sede with the commented lines.',
   'Database changes over time: every escritorio_datos call writes numbered migrations in supabase/migraciones/ (applied once, recorded in public.migraciones) and supabase/aplicar-todo.sql (safe to paste whole). To rename or remove columns/tables use "cambios" (quitar needs confirmar:true after the user approves; it keeps a respaldo_* copy) and pass the NEW state in "tablas". Before such changes, raise the minimum app version (escritorio_empaquetar { minima } and/or the admin System tab): older apps are blocked with an update screen and the database refuses their writes.',
+  'Offline mode is built into lib/datos-en-vivo.js: everything already viewed is cached on the PC (IndexedDB), saves/deletes without internet appear instantly in enVivo lists with _pendiente: true (show a small "pending" mark for those rows) and upload by themselves in order when the connection returns; new rows get a uuid id on the client (pass { generarId: false } only for non-uuid ids). Call datos.precargar([...main tables]) after login so screens work offline even if never opened. Changes the database rejects on upload go to datos.rechazados() and <estado-conexion> shows them with Retry/Discard. Never block a screen just because there is no internet.',
   'Robustness built in: errors from every PC (app, UI, automations) go to app_errores and the admin System tab; every insert/update/delete is audited (who, when, which PC, before/after); a daily backup automation (copia-de-seguridad) saves all tables on the admin PC; datos.guardar detects conflicts when another PC changed the row (pass the row with its "actualizado") and <estado-conexion> lets the user choose.',
   'Users and roles: pass "roles" to escritorio_datos (admin always exists). Each role has permisos per table {acciones: leer/crear/cambiar/borrar, alcance: todo | sede | propio}, automatizaciones it may run (ids or "*") and gestionaUsuarios. Permissions are data: the admin edits them later from the app. Users are created INSIDE the app with <admin-usuarios> through the server function supabase/functions/gestionar-usuarios (deploy it; the secret key stays in Supabase). Only the first admin is created in the Supabase dashboard.',
   'Client download page: when the app is for a client (they have a website, not a repository), call escritorio_sitio with the page URL (their domain or a host like Netlify) BEFORE the first installer is delivered. Default modo aviso: the app notifies of a new version and opens that page; nothing installs by itself. Each release: escritorio_empaquetar { version, notas }, then upload the whole escritorio/sitio/ folder to that host. For Windows+Mac at once, escritorio_publicar builds on GitHub Actions and leaves the artifact sitio-de-descargas (or deploys to Netlify with NETLIFY_AUTH_TOKEN/NETLIFY_SITE_ID secrets).',

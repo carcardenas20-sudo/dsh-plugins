@@ -1,4 +1,4 @@
-// Ejecuta UNA automatización en un proceso aparte (utilityProcess de Electron).
+// Ejecuta UNA automatización en un proceso aparte (utilityProcess de Electron, o un proceso de Node en Tauri y Java).
 // Si la automatización se cuelga o revienta, la app sigue viva: el motor mata este proceso y lo anota en el historial.
 'use strict'
 const path = require('node:path')
@@ -6,7 +6,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const { pathToFileURL } = require('node:url')
 
-const enviar = (m) => process.parentPort.postMessage(m)
+const enviar = (m) => (process.parentPort ? process.parentPort.postMessage(m) : process.send?.(m))
 let cancelado = false
 const robots = []
 const fotos = [] // capturas tomadas con pagina.captura() durante la corrida
@@ -212,10 +212,11 @@ async function describir(archivos) {
   enviar({ tipo: 'descripcion', lista })
 }
 
-process.parentPort.on('message', (ev) => {
-  const m = ev.data
+function alMensaje(m) {
   if (m?.tipo === 'describir') describir(m.archivos).finally(() => setTimeout(() => process.exit(0), 50))
   if (m?.tipo === 'ejecutar') ejecutar(m.datos).finally(() => setTimeout(() => process.exit(0), 50))
   if (m?.tipo === 'cancelar') { cancelado = true; cerrarRobots() }
   if (m?.tipo === 'secreto-respuesta') { const f = esperandoSecretos.get(m.pedido); esperandoSecretos.delete(m.pedido); f?.(m.valor) }
-})
+}
+if (process.parentPort) process.parentPort.on('message', (ev) => alMensaje(ev.data))
+else process.on('message', alMensaje)

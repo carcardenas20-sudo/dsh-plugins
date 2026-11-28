@@ -21,6 +21,7 @@ import { AQUI, VERSIONES, DEFAULTS, slug, limpio, iniciales, validarAtajo, icono
 import { flujoGithub, paginaDescargas } from './lib/github.js'
 import { PAGINA_INICIAL, LEEME, REGLAS } from './lib/textos.js'
 import { correr, finalDe, npm, npx, raizGit, repoGithub, detectarWeb, tamanoLegible } from './lib/procesos.js'
+import { TECNOLOGIAS, crearTauri, crearJava, juntarInstaladores, nombreBinario } from './lib/otras.js'
 
 export { slug, validarAtajo, iconoSvg, paqueteApp, flujoGithub, paginaDescargas }
 
@@ -42,6 +43,7 @@ export function apply(ctx, rawConfig) {
   // Apps creadas con versiones anteriores del plugin: les agrega el motor y sus dependencias.
   async function asegurarMotor(dir) {
     const cambios = []
+    try { if ((JSON.parse(await readFile(path.join(dir, 'escritorio.config.json'), 'utf8')).tecnologia || 'electron') !== 'electron') return null } catch {}
     if (!existsSync(path.join(dir, 'motor', 'motor.cjs'))) {
       for (const f of ['main.js', 'preload.js']) await cp(path.join(AQUI, 'plantilla', f), path.join(dir, f))
       await cp(path.join(AQUI, 'plantilla', 'motor'), path.join(dir, 'motor'), { recursive: true })
@@ -110,9 +112,80 @@ export function apply(ctx, rawConfig) {
     return correr(bin, [...args, ...extra], { cwd: dir, signal, timeoutMs, env })
   }
 
+  // ---------- Tauri (Rust) y JavaFX (Java) ----------
+  const tecnologiaDe = (conf) => conf?.tecnologia || 'electron'
+  const NOMBRE_TEC = { electron: 'Electron', tauri: 'Tauri (Rust)', java: 'JavaFX (Java)' }
+  async function requisitos(tec, signal) {
+    if (tec === 'tauri') {
+      const r = await correr(process.platform === 'win32' ? 'cargo.exe' : 'cargo', ['--version'], { signal, timeoutMs: 30_000 }).catch(() => ({ codigo: 1 }))
+      if (r.codigo === 0) return null
+      return ['Falta Rust en este PC (Tauri compila con Rust). Instálalo una vez y vuelve a probar:',
+        process.platform === 'win32' ? '- Windows: winget install Rustlang.Rustup y luego las "Herramientas de compilación de C++" de Visual Studio (winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"). Reinicia la terminal.'
+          : process.platform === 'darwin' ? '- Mac: xcode-select --install y luego curl --proto "=https" -sSf https://sh.rustup.rs | sh'
+          : '- Linux: curl --proto "=https" -sSf https://sh.rustup.rs | sh y las librerías: sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev',
+        'Sin instalar nada aquí también se puede: escritorio_publicar compila los instaladores en GitHub.'].join('\n')
+    }
+    if (tec === 'java') {
+      const java = process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', process.platform === 'win32' ? 'javac.exe' : 'javac') : (process.platform === 'win32' ? 'javac.exe' : 'javac')
+      const r = await correr(java, ['-version'], { signal, timeoutMs: 30_000 }).catch(() => ({ codigo: 1, salida: '' }))
+      const v = Number(String(r.salida || '').match(/javac (\d+)/)?.[1] || 0)
+      if (r.codigo === 0 && v >= 21) return null
+      return [r.codigo === 0 ? `Este PC tiene Java ${v}; la app necesita el JDK 21 o más nuevo.` : 'Falta el JDK de Java en este PC.',
+        process.platform === 'win32' ? '- Windows: winget install Microsoft.OpenJDK.21 (reinicia la terminal)' : process.platform === 'darwin' ? '- Mac: brew install openjdk@21' : '- Linux: sudo apt install openjdk-21-jdk',
+        'Para el instalador de Windows (.exe) también hace falta WiX 3: winget install WiXToolset.WiXToolset. O sin instalar nada: escritorio_publicar compila en GitHub.'].join('\n')
+    }
+    return null
+  }
+  async function binarioTauri(dir) {
+    const conf = JSON.parse(await readFile(path.join(dir, 'src-tauri', 'tauri.conf.json'), 'utf8'))
+    return path.join(dir, 'src-tauri', 'target', 'debug', (conf.mainBinaryName || 'app') + (process.platform === 'win32' ? '.exe' : ''))
+  }
+  async function probarOtra(dir, conf, args, signal, carpetaPrueba, pasos) {
+    const tec = tecnologiaDe(conf)
+    const falta = await requisitos(tec, signal)
+    if (falta) return { error: falta }
+    const p = await instalarSiFalta(dir, signal); if (p) pasos.push(p)
+    const solo = Array.isArray(args?.soloAutomatizaciones) ? args.soloAutomatizaciones.map(String) : []
+    const env = { DSH_ESCRITORIO_PRUEBA: carpetaPrueba, DSH_ESCRITORIO_PRUEBA_AUTOS: solo.join(','), ...(args?.secretos ? { DSH_ESCRITORIO_SECRETOS: JSON.stringify(args.secretos) } : {}) }
+    await rm(carpetaPrueba, { recursive: true, force: true })
+    const prep = await correr(process.execPath, ['scripts/preparar.cjs'], { cwd: dir, signal, timeoutMs: 15 * 60_000 })
+    if (prep.codigo !== 0) return { error: `falló la preparación:\n${finalDe(prep.salida)}` }
+    if (tec === 'tauri') {
+      const primera = !existsSync(path.join(dir, 'src-tauri', 'target', 'debug'))
+      const b = await correr(npx, ['tauri', 'build', '--debug', '--no-bundle', '--config', 'src-tauri/tauri.extra.json'], { cwd: dir, signal, timeoutMs: 40 * 60_000 })
+      if (b.codigo !== 0) return { error: `no compiló (Rust):\n${finalDe(b.salida, 3500)}` }
+      pasos.push(primera ? 'Compilada con Rust (la primera vez tarda varios minutos; las siguientes, segundos).' : 'Compilada con Rust.')
+      const bin = await binarioTauri(dir)
+      const linuxSinPantalla = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY
+      const r = linuxSinPantalla ? await correr('xvfb-run', ['-a', '-s', '-screen 0 1440x960x24', bin], { cwd: dir, signal, timeoutMs: 360_000, env }) : await correr(bin, [], { cwd: dir, signal, timeoutMs: 360_000, env })
+      return { salida: r.salida }
+    }
+    const r = await correr(process.execPath, ['scripts/java.cjs', 'probar'], { cwd: dir, signal, timeoutMs: 20 * 60_000, env })
+    pasos.push('Compilada con el JDK.')
+    return { salida: r.salida }
+  }
+  function informePrueba(res, conf, pasos, cwd) {
+    const ok = !res.errores.length
+    return [
+      ...pasos,
+      `${ok ? '✅' : '❌'} ${res.nombre} ${res.version} abrió${ok ? ' sin errores' : ' con problemas'} (${res.plataforma}${res.tecnologia ? `, ${NOMBRE_TEC[res.tecnologia] || res.tecnologia}` : ''}). Título: "${res.titulo}".`,
+      `Puente window.escritorio: ${res.puente ? 'sí' : 'NO'} · Bandeja: ${res.bandeja ? 'sí' : conf.bandeja ? 'no disponible en esta prueba' : 'desactivada'}${res.tecnologia && res.tecnologia !== 'electron' ? '' : ` · Atajo ${conf.atajo ?? '—'}: ${res.atajo === null ? '—' : res.atajo ? 'registrado' : 'NO se pudo registrar (¿lo usa otra app?)'}`}`,
+      ...(res.errores.length ? ['Errores:', ...res.errores.slice(0, 8).map((e) => `- ${e}`)] : []),
+      `Texto visible: ${String(res.texto || '').replace(/\s+/g, ' ').slice(0, 200) || '(vacío)'}`,
+      ...(res.automatizaciones ? ['', `Automatizaciones (${res.automatizaciones.length}):`, ...res.automatizaciones.map((a) => a.omitida ? `- ${a.id}: omitida en la prueba` : [
+        `- ${a.ok ? '✅' : '❌'} ${a.id}${a.nombre ? ` "${a.nombre}"` : ''}${a.cuando ? ` [${a.cuando.join(' · ')}]` : ''}${a.ms != null ? ` en ${(a.ms / 1000).toFixed(1)} s` : ''}`,
+        ...(a.error ? [`    error: ${a.error}`] : []),
+        ...(a.resultado != null ? [`    resultado: ${JSON.stringify(a.resultado).slice(0, 400)}`] : []),
+        ...(a.registros?.length ? [`    registro: ${a.registros.slice(-8).join(' | ').slice(0, 600)}`] : []),
+        ...(a.capturas?.length ? [`    pantallas del robot (míralas): ${a.capturas.map((c) => path.relative(cwd, c).startsWith('..') ? c : path.relative(cwd, c)).join(', ')}`] : []),
+      ].join('\n'))] : []),
+      res.capturas.length ? `Capturas (míralas): ${res.capturas.map((c) => path.relative(cwd, c).split(path.sep).join('/')).join(', ')}` : 'Sin capturas en este sistema (la verificación se hizo con el texto y los errores de la página).',
+    ].join('\n')
+  }
+
   ctx.tools.register({
     name: 'escritorio_crear',
-    description: 'Crea la app de escritorio (Windows y Mac, con Electron) en escritorio/: ventana que recuerda su tamaño, bandeja del sistema, atajo global, acceso a archivos del PC, notificaciones, arranque con el sistema, una sola instancia, actualizaciones automáticas e ícono. La interfaz puede ser el proyecto web (Vite/React: se compila solo), una carpeta con HTML ya hecho, una URL desplegada o una página inicial nueva.',
+    description: 'Crea la app de escritorio (Windows y Mac) en escritorio/, con Electron (por defecto), Tauri (Rust: instalador mucho más liviano, usa el navegador del sistema) o JavaFX (Java). Todas traen la misma interfaz web, automatizaciones, datos en vivo, sin internet y aviso de versiones: ventana que recuerda su tamaño, bandeja del sistema, atajo global, acceso a archivos del PC, notificaciones, arranque con el sistema, una sola instancia, actualizaciones automáticas e ícono. La interfaz puede ser el proyecto web (Vite/React: se compila solo), una carpeta con HTML ya hecho, una URL desplegada o una página inicial nueva.',
     parameters: {
       type: 'object',
       properties: {
@@ -125,6 +198,7 @@ export function apply(ctx, rawConfig) {
         bandeja: { type: 'boolean', description: 'Ícono en la bandeja del sistema y seguir abierta al cerrar la ventana (por defecto sí)' },
         atajo: { type: 'string', description: 'Atajo global para mostrar/ocultar, ej. CommandOrControl+Shift+K (opcional)' },
         carpeta: { type: 'string', description: 'Dónde crear la app (por defecto escritorio/)' },
+        tecnologia: { type: 'string', enum: TECNOLOGIAS, description: 'electron (por defecto; lo más probado, actualización automática completa) · tauri (Rust: instalador de ~10 MB más el motor si hay robots; necesita Rust para compilar en el PC, o GitHub) · java (JavaFX: necesita el JDK 21 para compilar; el instalador lleva su propio Java). Elige la que pida el usuario.' },
       },
       required: ['nombre'],
     },
@@ -153,19 +227,35 @@ export function apply(ctx, rawConfig) {
         if (!existsSync(path.join(webDir, 'index.html'))) throw new Error(`no hay index.html en ${path.relative(cwd, webDir) || 'la raíz'}`)
         conf.web = { carpeta: path.relative(dir, webDir).split(path.sep).join('/') || '.', salida: '.' }
       }
+      const tec = TECNOLOGIAS.includes(args.tecnologia) ? args.tecnologia : 'electron'
+      if (tec === 'java' && origen === 'url') throw new Error('La versión Java muestra la interfaz del propio proyecto; para una web ya publicada usa tecnologia "electron" o "tauri".')
+      if (tec !== 'electron') { conf.tecnologia = tec; delete conf.atajo }
       await mkdir(dir, { recursive: true })
-      await cp(path.join(AQUI, 'plantilla'), dir, { recursive: true })
-      await mkdir(path.join(dir, 'build'), { recursive: true })
-      await mkdir(path.join(dir, 'app'), { recursive: true })
       const raiz = await raizGit(cwd)
       const github = raiz ? await repoGithub(raiz) : null
       const o = { nombre, paquete: slug(nombre) || 'app-escritorio', version: '1.0.0', id: conf.id, github, color, web: conf.web }
-      await writeFile(path.join(dir, 'package.json'), JSON.stringify(paqueteApp(o), null, 2) + '\n')
+      if (tec === 'tauri') await crearTauri(dir, o)
+      else if (tec === 'java') await crearJava(dir, o)
+      else {
+        await cp(path.join(AQUI, 'plantilla'), dir, { recursive: true })
+        await writeFile(path.join(dir, 'package.json'), JSON.stringify(paqueteApp(o), null, 2) + '\n')
+        await writeFile(path.join(dir, '.gitignore'), 'node_modules/\ninstaladores/\n' + (conf.web ? 'app/\n' : ''))
+      }
+      await mkdir(path.join(dir, 'build'), { recursive: true })
+      await mkdir(path.join(dir, 'app'), { recursive: true })
       await writeFile(path.join(dir, 'escritorio.config.json'), JSON.stringify(conf, null, 2) + '\n')
       await writeFile(path.join(dir, 'build', 'icono.svg'), iconoSvg(nombre, color))
       if (origen === 'nueva') await writeFile(path.join(dir, 'app', 'index.html'), PAGINA_INICIAL({ nombre, color }))
-      await writeFile(path.join(dir, '.gitignore'), 'node_modules/\ninstaladores/\n' + (conf.web ? 'app/\n' : ''))
-      await writeFile(path.join(dir, 'LEEME.md'), LEEME(o))
+      await writeFile(path.join(dir, 'LEEME.md'), LEEME({ ...o, tecnologia: tec }))
+      if (tec !== 'electron') {
+        const falta = await requisitos(tec, exec.signal)
+        return [
+          `Creada la app de escritorio "${nombre}" con ${NOMBRE_TEC[tec]} en ${rel}/ (interfaz: ${origen === 'proyecto' ? `proyecto web, se compila con "${conf.web.comando}"` : origen === 'carpeta' ? `carpeta ${path.relative(cwd, webDir) || '.'}` : origen === 'url' ? conf.url : 'página inicial nueva en app/index.html'}).`,
+          `Trae lo mismo que la versión Electron: window.escritorio (archivos, notificaciones, arranque con el sistema), bandeja, una sola instancia, automatizaciones (con el Node que viaja en el instalador solo si hay robots), datos en vivo, modo sin internet, versión mínima y aviso de versión nueva desde la página de descargas (escritorio_sitio). No trae atajo global de teclado.`,
+          tec === 'tauri' ? 'Estructura: src-tauri/ (Rust, src/main.rs), app/ (interfaz), automatizaciones/, motor/, puente.js.' : 'Estructura: src/main/java/escritorio/ (App.java, Servidor.java…), app/ (interfaz), automatizaciones/, motor/.',
+          falta ? `\n⚠ Para probarla en este PC:\n${falta}` : `Siguiente: escritorio_probar (${tec === 'tauri' ? 'la primera compilación de Rust tarda unos 5-10 minutos' : 'descarga JavaFX la primera vez'}).`,
+        ].join('\n')
+      }
       return [
         `Creada la app de escritorio "${nombre}" en ${rel}/ (interfaz: ${origen === 'proyecto' ? `proyecto web ${conf.web.carpeta === '..' ? 'de la raíz' : conf.web.carpeta}, se compila con "${conf.web.comando}"` : origen === 'carpeta' ? `carpeta ${path.relative(cwd, webDir) || '.'}` : origen === 'url' ? conf.url : 'página inicial nueva en app/index.html'}).`,
         `Bandeja: ${conf.bandeja ? 'sí' : 'no'} · Atajo: ${atajo ?? 'ninguno'} · Actualizaciones: ${github ? `GitHub ${github.owner}/${github.repo}` : 'sin repositorio de GitHub detectado'}.`,
@@ -194,6 +284,16 @@ export function apply(ctx, rawConfig) {
       const conf = await leerConfig(dir)
       if (!conf) return `No hay app de escritorio en ${rel}/. Créala con escritorio_crear.`
       const pasos = []
+      if (tecnologiaDe(conf) !== 'electron') {
+        const carpetaPrueba = path.join(dir, '.prueba')
+        let r
+        try { r = await probarOtra(dir, conf, args, exec.signal, carpetaPrueba, pasos) } catch (e) { return `❌ ${e.message}` }
+        if (r.error) return `${pasos.join('\n')}\n❌ ${r.error}`
+        let res = null
+        try { res = JSON.parse(await readFile(path.join(carpetaPrueba, 'resultado.json'), 'utf8')) } catch {}
+        if (!res) return `${pasos.join('\n')}\n❌ La app no arrancó:\n${finalDe(r.salida, 2500)}`
+        return informePrueba({ capturas: [], ...res, titulo: res.titulo ?? '', errores: res.errores || [] }, conf, pasos, cwd)
+      }
       const conAutos = existsSync(path.join(dir, 'automatizaciones'))
       if (conAutos) { try { const m = await asegurarMotor(dir); if (m) pasos.push(m) } catch (e) { return `❌ ${e.message}` } }
       try {
@@ -205,22 +305,7 @@ export function apply(ctx, rawConfig) {
       let res = null
       try { res = JSON.parse(await readFile(path.join(carpetaPrueba, 'resultado.json'), 'utf8')) } catch {}
       if (!res) return `${pasos.join('\n')}\n❌ La app no arrancó:\n${finalDe(r.salida, 2500)}`
-      const ok = !res.errores.length
-      return [
-        ...pasos,
-        `${ok ? '✅' : '❌'} ${res.nombre} ${res.version} abrió${ok ? ' sin errores' : ' con problemas'} (${res.plataforma}). Título: "${res.titulo}".`,
-        `Puente window.escritorio: ${res.puente ? 'sí' : 'NO'} · Bandeja: ${res.bandeja ? 'sí' : conf.bandeja ? 'NO' : 'desactivada'} · Atajo ${conf.atajo ?? '—'}: ${res.atajo === null ? '—' : res.atajo ? 'registrado' : 'NO se pudo registrar (¿lo usa otra app?)'}`,
-        ...(res.errores.length ? ['Errores:', ...res.errores.slice(0, 8).map((e) => `- ${e}`)] : []),
-        `Texto visible: ${res.texto.replace(/\s+/g, ' ').slice(0, 200) || '(vacío)'}`,
-        ...(res.automatizaciones ? ['', `Automatizaciones (${res.automatizaciones.length}):`, ...res.automatizaciones.map((a) => a.omitida ? `- ${a.id}: omitida en la prueba` : [
-          `- ${a.ok ? '✅' : '❌'} ${a.id}${a.nombre ? ` "${a.nombre}"` : ''}${a.cuando ? ` [${a.cuando.join(' · ')}]` : ''}${a.ms != null ? ` en ${(a.ms / 1000).toFixed(1)} s` : ''}`,
-          ...(a.error ? [`    error: ${a.error}`] : []),
-          ...(a.resultado != null ? [`    resultado: ${JSON.stringify(a.resultado).slice(0, 400)}`] : []),
-          ...(a.registros?.length ? [`    registro: ${a.registros.slice(-8).join(' | ').slice(0, 600)}`] : []),
-          ...(a.capturas?.length ? [`    pantallas del robot (míralas): ${a.capturas.map((c) => path.relative(cwd, c).startsWith('..') ? c : path.relative(cwd, c)).join(', ')}`] : []),
-        ].join('\n'))] : []),
-        `Capturas (míralas): ${res.capturas.map((c) => path.relative(cwd, c).split(path.sep).join('/')).join(', ')}`,
-      ].join('\n')
+      return informePrueba(res, conf, pasos, cwd)
     },
   })
 
@@ -531,17 +616,34 @@ export function apply(ctx, rawConfig) {
       const conf = await leerConfig(dir)
       if (!conf) return `No hay app de escritorio en ${rel}/. Créala con escritorio_crear.`
       const pasos = []
-      try { for (const p of [await instalarSiFalta(dir, exec.signal), await prepararInterfaz(dir, conf, exec.signal), await asegurarIcono(dir, exec.signal)]) if (p) pasos.push(p) } catch (e) { return `❌ ${e.message}` }
+      const tec = tecnologiaDe(conf)
       if (args?.version) {
         if (!/^\d+\.\d+\.\d+$/.test(args.version)) throw new Error('"version" debe ser como 1.2.3')
         const pkg = JSON.parse(await readFile(path.join(dir, 'package.json'), 'utf8')); pkg.version = args.version
         await writeFile(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n')
       }
-      const plat = process.platform === 'win32' ? '--win' : process.platform === 'darwin' ? '--mac' : '--linux'
-      const r = await correr(npx, ['electron-builder', plat, '--publish', 'never'], { cwd: dir, signal: exec.signal, timeoutMs: cfg.minutosEmpaquetar * 60_000, env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' } })
-      if (r.codigo !== 0) return `${pasos.join('\n')}\n❌ Falló el empaquetado:\n${finalDe(r.salida, 3500)}`
+      const version = JSON.parse(await readFile(path.join(dir, 'package.json'), 'utf8')).version
       const out = path.join(dir, 'instaladores')
-      const archivos = (await readdir(out)).filter((f) => /\.(exe|dmg|AppImage|zip|deb)$/i.test(f))
+      let archivos
+      if (tec !== 'electron') {
+        const falta = await requisitos(tec, exec.signal)
+        if (falta) return `❌ ${falta}`
+        try { const p = await instalarSiFalta(dir, exec.signal); if (p) pasos.push(p) } catch (e) { return `❌ ${e.message}` }
+        const prep = await correr(process.execPath, ['scripts/preparar.cjs'], { cwd: dir, signal: exec.signal, timeoutMs: 15 * 60_000 })
+        if (prep.codigo !== 0) return `❌ Falló la preparación:\n${finalDe(prep.salida, 2500)}`
+        const bundles = process.platform === 'win32' ? 'nsis' : process.platform === 'darwin' ? 'dmg' : 'appimage,deb'
+        const r = tec === 'tauri'
+          ? await correr(npx, ['tauri', 'build', '--config', 'src-tauri/tauri.extra.json', '--bundles', bundles], { cwd: dir, signal: exec.signal, timeoutMs: 45 * 60_000 })
+          : await correr(process.execPath, ['scripts/java.cjs', 'empaquetar'], { cwd: dir, signal: exec.signal, timeoutMs: 30 * 60_000 })
+        if (r.codigo !== 0) return `${pasos.join('\n')}\n❌ Falló el empaquetado:\n${finalDe(r.salida, 3500)}`
+        archivos = (await juntarInstaladores(dir, tec, version)).map((x) => x.archivo)
+      } else {
+        try { for (const p of [await instalarSiFalta(dir, exec.signal), await prepararInterfaz(dir, conf, exec.signal), await asegurarIcono(dir, exec.signal)]) if (p) pasos.push(p) } catch (e) { return `❌ ${e.message}` }
+        const plat = process.platform === 'win32' ? '--win' : process.platform === 'darwin' ? '--mac' : '--linux'
+        const r = await correr(npx, ['electron-builder', plat, '--publish', 'never'], { cwd: dir, signal: exec.signal, timeoutMs: cfg.minutosEmpaquetar * 60_000, env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' } })
+        if (r.codigo !== 0) return `${pasos.join('\n')}\n❌ Falló el empaquetado:\n${finalDe(r.salida, 3500)}`
+        archivos = (await readdir(out)).filter((f) => /\.(exe|dmg|AppImage|zip|deb)$/i.test(f))
+      }
       const lista = await Promise.all(archivos.map(async (f) => `- ${rel}/instaladores/${f} (${await tamanoLegible(path.join(out, f))})`))
       let sitio = null
       if (conf.sitio) {
@@ -629,18 +731,21 @@ module.exports = {
       try { url = new URL(String(args.url).trim()) } catch { return '❌ La dirección debe ser completa, ej. https://descargas.textilesx.com/' }
       if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) return '❌ Usa https:// (las actualizaciones no se descargan por http sin cifrar).'
       const base = url.href.endsWith('/') ? url.href : `${url.href}/`
-      const modo = args.modo === 'automatica' ? true : 'aviso'
+      const otra = tecnologiaDe(conf) !== 'electron'
+      const modo = args.modo === 'automatica' && !otra ? true : 'aviso'
       const antes = conf.sitio
       Object.assign(conf, { sitio: base, paginaVersiones: base, actualizaciones: modo })
       if (args.descripcion) conf.descripcionSitio = args.descripcion
       if (args.color) conf.colorSitio = args.color
       delete conf.publicacion
       await writeFile(path.join(dir, 'escritorio.config.json'), JSON.stringify(conf, null, 2) + '\n')
-      const archivoPkg = path.join(dir, 'package.json')
-      const pkg = JSON.parse(await readFile(archivoPkg, 'utf8'))
-      pkg.build.publish = [{ provider: 'generic', url: base }]
-      if (!pkg.build.files.includes('package.json')) pkg.build.files.push('package.json')
-      await writeFile(archivoPkg, JSON.stringify(pkg, null, 2) + '\n')
+      if (!otra) {
+        const archivoPkg = path.join(dir, 'package.json')
+        const pkg = JSON.parse(await readFile(archivoPkg, 'utf8'))
+        pkg.build.publish = [{ provider: 'generic', url: base }]
+        if (!pkg.build.files.includes('package.json')) pkg.build.files.push('package.json')
+        await writeFile(archivoPkg, JSON.stringify(pkg, null, 2) + '\n')
+      }
       await asegurarScriptsSitio(dir)
       const pagina = path.join(dir, 'descargas', 'index.html')
       if (!existsSync(pagina)) { await mkdir(path.dirname(pagina), { recursive: true }); await cp(path.join(AQUI, 'plantilla', 'scripts', 'pagina-descargas.html'), pagina) }
@@ -648,6 +753,7 @@ module.exports = {
       return [
         `✅ La app buscará versiones nuevas en ${base} y ${modo === 'aviso' ? 'AVISARÁ ("Hay una versión nueva") con un botón que abre esa página para descargarla' : 'se actualizará sola al cerrarse'}.`,
         `✅ Página editable: ${rel}/descargas/index.html (lee version.json: nombre, versión, novedades e instaladores).`,
+        ...(otra && args.modo === 'automatica' ? ['ℹ Con Tauri y Java las actualizaciones son siempre con aviso: la app avisa y el botón abre la página para descargar.'] : []),
         ...(antes && antes !== base ? [`⚠ Cambió la dirección (antes ${antes}): las apps ya instaladas siguen buscando en la anterior hasta que instalen una versión hecha con la nueva.`] : []),
         '',
         'Cómo se publica cada versión (díselo al usuario):',
@@ -688,8 +794,10 @@ module.exports = {
         paginaRel = path.relative(raiz, carpetaPagina).split(path.sep).join('/')
         try { const r = await fetch(`https://api.github.com/repos/${gh.owner}/${gh.repo}`, { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'dsh-escritorio' } }); visibilidad = r.ok ? ((await r.json()).private ? 'privado' : 'público') : r.status === 404 ? 'privado' : null } catch {}
       }
-      await writeFile(flujo, flujoGithub({ dirRel, webDirRel: webConDeps, nombre: conf.nombre, paginaRel, sitio: conf.sitio || null }))
-      if (gh && !conf.sitio) {
+      const tec = tecnologiaDe(conf)
+      if (tec !== 'electron') paginaRel = null // la página de GitHub Pages lee las versiones de Electron; Tauri y Java usan escritorio_sitio
+      await writeFile(flujo, flujoGithub({ dirRel, webDirRel: webConDeps, nombre: conf.nombre, paginaRel, sitio: conf.sitio || null, tecnologia: tec }))
+      if (gh && !conf.sitio && tec === 'electron') {
         const pkg = JSON.parse(await readFile(path.join(dir, 'package.json'), 'utf8'))
         pkg.build.publish = [{ provider: 'github', owner: gh.owner, repo: gh.repo, releaseType: 'release' }]
         await writeFile(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n')
@@ -698,7 +806,8 @@ module.exports = {
         await writeFile(path.join(dir, 'escritorio.config.json'), JSON.stringify(conf, null, 2) + '\n')
       }
       return [
-        `Flujo escrito: ${path.relative(cwd, flujo).split(path.sep).join('/')} (Windows, Mac y Linux en paralelo; publica solo si los tres salen bien).`,
+        `Flujo escrito: ${path.relative(cwd, flujo).split(path.sep).join('/')} (${NOMBRE_TEC[tec]}: Windows, Mac y Linux en paralelo; publica solo si los tres salen bien).`,
+        ...(tec !== 'electron' && !conf.sitio ? ['ℹ Para que las apps instaladas AVISEN de versiones nuevas, configura la página de descargas con escritorio_sitio (puede ser la del cliente o un Netlify gratis) antes de la primera versión.'] : []),
         gh ? `Repositorio: github.com/${gh.owner}/${gh.repo}` : 'Ojo: no encontré el repositorio de GitHub en .git/config; las actualizaciones automáticas necesitan uno.',
         '',
         'Para publicar una versión (pídele aprobación al usuario antes):',

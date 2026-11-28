@@ -1,9 +1,97 @@
 // GitHub Actions (compilar Windows, Mac y Linux; publicar versiones; sitio de descargas) y página de descargas.
 import { slug } from './base.js'
 
-export function flujoGithub({ dirRel, webDirRel, nombre, paginaRel = null, sitio = null }) {
+// Paso de compilación de las apps Tauri (Rust) y JavaFX (Java): mismo resultado (instaladores/), otras herramientas.
+function pasosOtras({ tecnologia, dirRel, enDir, webDirRel }) {
+  const d = dirRel === '.' ? '' : `${dirRel}/`
+  const comunes = `      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+${webDirRel ? `      - name: Dependencias de la interfaz
+        run: npm install --no-audit --no-fund
+        working-directory: ${webDirRel}
+` : ''}      - name: Dependencias de la app${enDir}
+        run: npm install --no-audit --no-fund
+      - name: Versión
+        if: env.VERSION != ''${enDir}
+        shell: bash
+        run: |
+          V="\${VERSION#escritorio-v}"
+          [[ "$V" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || { echo "::error::La versión debe ser como 1.2.0 (recibí '$V')"; exit 1; }
+          npm pkg set version="$V"
+`
+  if (tecnologia === 'tauri') return comunes + `      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${d}src-tauri
+      - name: Librerías de Linux para Tauri
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      - name: Instaladores (Tauri)${enDir}
+        shell: bash
+        run: |
+          node scripts/preparar.cjs
+          case "$RUNNER_OS" in Windows) B=nsis;; macOS) B=dmg;; *) B=appimage,deb;; esac
+          npx tauri build --config src-tauri/tauri.extra.json --bundles $B
+          mkdir -p instaladores
+          find src-tauri/target/release/bundle \\( -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \\) -exec cp {} instaladores/ \\;
+          ls -la instaladores
+`
+  return comunes + `      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: WiX para el instalador de Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) { choco install wixtoolset --version=3.14.1 -y --no-progress; echo "C:\\Program Files (x86)\\WiX Toolset v3.14\\bin" >> $env:GITHUB_PATH }
+      - name: Instaladores (Java)${enDir}
+        shell: bash
+        run: |
+          node scripts/preparar.cjs
+          node scripts/java.cjs empaquetar
+          mkdir -p instaladores && cp paquete/instaladores/* instaladores/
+          ls -la instaladores
+`
+}
+
+function pasosElectron({ enDir, webDirRel }) {
+  return `      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+${webDirRel ? `      - name: Dependencias de la interfaz
+        run: npm install --no-audit --no-fund
+        working-directory: ${webDirRel}
+` : ''}      - name: Dependencias de la app${enDir}
+        run: npm install --no-audit --no-fund
+      - name: Interfaz${enDir}
+        run: npm run web
+      - name: Versión
+        if: env.VERSION != ''${enDir}
+        shell: bash
+        run: |
+          V="\${VERSION#escritorio-v}"
+          [[ "$V" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || { echo "::error::La versión debe ser como 1.2.0 (recibí '$V')"; exit 1; }
+          npm pkg set version="$V"
+      - name: Mac sin Spotlight (evita que el .dmg quede "ocupado")
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off
+      - name: Instaladores${enDir}
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          case "$RUNNER_OS" in Windows) P=--win;; macOS) P=--mac;; *) P=--linux;; esac
+          npx electron-builder $P --publish never
+`
+}
+
+export function flujoGithub({ dirRel, webDirRel, nombre, paginaRel = null, sitio = null, tecnologia = 'electron' }) {
   const enDir = dirRel === '.' ? '' : `\n        working-directory: ${dirRel}`
   const sal = `${dirRel === '.' ? '' : `${dirRel}/`}instaladores`
+  const otra = tecnologia !== 'electron'
   return `# Compila ${nombre} para Windows, Mac y Linux en los servidores de GitHub (generado por dsh-escritorio).
 # Publicar una versión (las apps ya instaladas la descargan solas y se actualizan al cerrarse), de dos formas:
 # - Desde la web: pestaña Actions → Escritorio → Run workflow → escribe la versión (ej. 1.2.0).
@@ -40,44 +128,16 @@ jobs:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: \${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-${webDirRel ? `      - name: Dependencias de la interfaz
-        run: npm install --no-audit --no-fund
-        working-directory: ${webDirRel}
-` : ''}      - name: Dependencias de la app${enDir}
-        run: npm install --no-audit --no-fund
-      - name: Interfaz${enDir}
-        run: npm run web
-      - name: Versión
-        if: env.VERSION != ''${enDir}
-        shell: bash
-        run: |
-          V="\${VERSION#escritorio-v}"
-          [[ "$V" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || { echo "::error::La versión debe ser como 1.2.0 (recibí '$V')"; exit 1; }
-          npm pkg set version="$V"
-      - name: Mac sin Spotlight (evita que el .dmg quede "ocupado")
-        if: runner.os == 'macOS'
-        run: sudo mdutil -a -i off
-      - name: Instaladores${enDir}
-        shell: bash
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: |
-          case "$RUNNER_OS" in Windows) P=--win;; macOS) P=--mac;; *) P=--linux;; esac
-          npx electron-builder $P --publish never
-      - uses: actions/upload-artifact@v4
+${otra ? pasosOtras({ tecnologia, dirRel, enDir, webDirRel }) : pasosElectron({ enDir, webDirRel })}      - uses: actions/upload-artifact@v4
         with:
           name: ${slug(nombre) || 'app'}-\${{ runner.os }}
           path: |
             ${sal}/*.exe
             ${sal}/*.dmg
-            ${sal}/*.zip
             ${sal}/*.AppImage
+${otra ? `            ${sal}/*.deb` : `            ${sal}/*.zip
             ${sal}/*.blockmap
-            ${sal}/latest*.yml
+            ${sal}/latest*.yml`}
           if-no-files-found: error
 
   publicar:

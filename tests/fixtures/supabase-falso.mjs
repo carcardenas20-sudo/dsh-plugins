@@ -8,7 +8,7 @@ export function createClient() {
       const q = {
         select() { return q }, eq(k, v) { filtros.push([k, v]); return q }, order() { return q }, limit() { return q }, maybeSingle() { if (t === 'pagos') return Promise.resolve({ data: estado.filas.pagos.find((f) => filtros.every(([k, v]) => f[k] === v)) ?? null }); return Promise.resolve({ data: t === 'roles' ? { nombre: 'cajero', permisos: { pagos: { acciones: ['leer', 'crear'], alcance: 'sede' } }, automatizaciones: ['descargar-pagos'], gestiona_usuarios: false } : { id: 'u1', nombre: 'Laura', rol: 'cajero', sede: 'Norte' } }) },
         then(ok) { return Promise.resolve(estado.red ? { data: estado.filas[t].filter((f) => filtros.every(([k, v]) => f[k] === v)) } : { error: errRed }).then(ok) },
-        upsert(fila) { return { select: () => (estado.red ? (estado.escrituras.push(['upsert', t, fila]), Promise.resolve({ data: [fila] })) : Promise.reject(new TypeError('Failed to fetch'))) } },
+        upsert(fila) { return { select: () => (!estado.red ? Promise.reject(new TypeError('Failed to fetch')) : estado.rechazar === t ? Promise.resolve({ error: { code: '42501', message: 'new row violates row-level security policy' } }) : (estado.escrituras.push(['upsert', t, fila]), Promise.resolve({ data: [fila] }))) } },
         delete() { return { eq: (k, v) => (estado.red ? (estado.escrituras.push(['delete', t, v]), Promise.resolve({})) : Promise.resolve({ error: errRed })) } },
         insert(filas) { if (!estado.red) return Promise.reject(new TypeError('Failed to fetch')); (estado.insertados[t] ||= []).push(...(Array.isArray(filas) ? filas : [filas])); return Promise.resolve({}) },
         update(cambio) {

@@ -64,7 +64,7 @@ Qué decirle a DeepSeek:
 ```js
 import { datos } from './lib/datos.js'
 datos.enVivo('pagos', { orden: 'fecha' }, (filas) => pintar(filas)) // se actualiza solo en todos los PCs
-await datos.guardar('pagos', fila)                                  // sin internet queda en cola
+await datos.guardar('pagos', fila)                                  // sin internet se ve al instante y sube al volver
 datos.sesion.puede('pagos', 'borrar')                               // para mostrar u ocultar botones
 ```
 
@@ -107,6 +107,7 @@ Qué decirle a DeepSeek:
 - **Errores de todos los equipos.** Los fallos de la app, de la interfaz y de las automatizaciones llegan a la pestaña **Sistema**, con equipo, versión y usuario. Si no hay internet o sesión, esperan en cola.
 - **Historial de cambios.** Queda registrado quién creó, cambió o borró cada registro, cuándo, desde qué equipo y qué valor tenía antes.
 - **Copia de seguridad diaria.** El equipo del administrador guarda todas las tablas cada día a las 8 pm (JSON y CSV, últimas 30 copias). Si el PC estaba apagado, la hace al abrirlo.
+- **Trabaja sin internet.** Lo que ya se vio queda guardado en el equipo (IndexedDB, aguanta miles de registros). Lo que se guarda o borra sin conexión aparece al instante en las listas, marcado como pendiente, y se sube solo y en orden cuando vuelve el internet, aunque cierren la app entre tanto. `datos.precargar(['clientes', 'productos'])` deja tablas completas listas aunque nunca se hayan abierto esas pantallas. Si la base rechaza algo al subirlo (por ejemplo, por permisos), el indicador muestra "✕ 1 sin subir" con **Reintentar** o **Descartar**.
 - **Conflictos.** Si dos equipos editan el mismo registro, no se pisan. El indicador muestra "⚠ 1 conflicto" y el usuario elige qué versión queda.
 - **Claves de los robots en cada equipo.** Se guardan cifradas con el llavero de Windows o Mac desde el panel (Datos privados), nunca en el instalador. En el código se leen con `await secreto('clave')`.
 

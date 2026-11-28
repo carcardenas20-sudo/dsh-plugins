@@ -31,9 +31,9 @@ assert.deepEqual(v2.slice(0, 2), ['copia-local', 'copia-local'])
 let pend = []; d.alCambiarPendientes((n) => pend.push(n))
 assert.deepEqual(await d.guardar('pagos', { id: 9, valor: 7 }), { ok: true, enCola: true }); assert.equal(d.pendientes(), 1)
 let con = []; d.alCambiarConexion((c) => con.push(c))
-navigator.onLine = false; evs.offline.forEach((f) => f()); assert.deepEqual(con.at(-1), { estado: 'sin-conexion', pendientes: 1 })
+navigator.onLine = false; evs.offline.forEach((f) => f()); assert.deepEqual(con.at(-1), { estado: 'sin-conexion', pendientes: 1, rechazados: 0 })
 estado.red = true; navigator.onLine = true; evs.online.forEach((f) => f()); await espera(50)
-assert.equal(d.pendientes(), 0); assert.deepEqual(estado.escrituras.at(-1), ['upsert', 'pagos', { id: 9, valor: 7 }]); assert.deepEqual(con.at(-1), { estado: 'en-linea', pendientes: 0 })
+assert.equal(d.pendientes(), 0); assert.deepEqual(estado.escrituras.at(-1), ['upsert', 'pagos', { id: 9, valor: 7 }]); assert.deepEqual(con.at(-1), { estado: 'en-linea', pendientes: 0, rechazados: 0 })
 // sesión
 let ses = []; d.sesion.alCambiar((u, p) => ses.push([u?.email ?? null, p?.sede ?? null]))
 assert.deepEqual(await d.sesion.entrar('a@b.co', 'mala'), { ok: false, error: 'Correo o clave incorrectos.' })
@@ -59,4 +59,33 @@ await d.sesion.entrar('a@b.co', 'bien123'); await espera()
 await d.reportarError('interfaz', 'TypeError: x', 'pila'); await d.reportarError('interfaz', 'TypeError: x', 'pila')
 assert.equal(estado.insertados.app_errores.length, 1, 'el mismo error en un minuto cuenta una vez')
 assert.deepEqual({ ...estado.insertados.app_errores[0], detalle: undefined }, { equipo: 'CAJA-1', version: '1.4.0', origen: 'interfaz', mensaje: 'TypeError: x', detalle: undefined })
-parar(); console.log('datos-en-vivo: ok (filtro, orden, insert/update/delete en vivo, copia local, cola, conexión, sesión)')
+// ---------- modo sin internet ----------
+estado.filas.pagos = [{ id: 'a', sede: 'Norte', valor: 1 }, { id: 'b', sede: 'Norte', valor: 2 }, { id: 'c', sede: 'Sur', valor: 3 }]
+const d3 = crearDatos({ url: 'https://sin-red.supabase.co', clave: 'x' })
+assert.deepEqual(await d3.precargar(['pagos']), { pagos: { ok: true, filas: 3 } })
+estado.red = false
+// una pantalla nueva con un filtro que nunca se abrió con internet: sale de la copia de la tabla completa
+let v3 = []; const parar3 = d3.enVivo('pagos', { filtro: { sede: 'Norte' }, orden: 'valor' }, (f, i) => v3.push([f.map((x) => x.id + (x._pendiente ? '*' : '')), i.origen])); await espera()
+assert.deepEqual(v3[0], [['a', 'b'], 'copia-local'])
+// guardar sin internet: se ve al instante, con id nuevo y marcado como pendiente
+const r3 = await d3.guardar('pagos', { sede: 'Norte', valor: 0 }); assert.equal(r3.enCola, true)
+const nuevo = d3.cola()[0].fila.id; assert.match(nuevo, /^[0-9a-f-]{36}$/)
+assert.deepEqual(v3.at(-1)[0], [nuevo + '*', 'a', 'b'], 'la fila nueva aparece ordenada y pendiente')
+await d3.guardar('pagos', { id: 'a', sede: 'Norte', valor: 9 }); assert.deepEqual(v3.at(-1)[0], [nuevo + '*', 'b', 'a*'], 'editar: se ve el cambio')
+await d3.borrar('pagos', 'b'); assert.deepEqual(v3.at(-1)[0], [nuevo + '*', 'a*'], 'borrar: desaparece')
+assert.equal(d3.pendientes(), 3)
+// con cola pendiente, lo nuevo va detrás (aunque vuelva la red) para respetar el orden; un rechazo no tranca lo demás
+estado.red = true; estado.rechazar = 'pagos'; estado.escrituras = []
+await d3.sincronizar(); assert.equal(d3.pendientes(), 3, 'sin sesión, un "no permitido" espera a que alguien entre')
+await d3.sesion.entrar('a@b.co', 'bien123'); await espera(); await d3.sincronizar(); await espera()
+assert.equal(d3.pendientes(), 0); assert.equal(d3.rechazados().length, 2, 'los dos guardados rechazados quedan a la vista')
+assert.match(d3.rechazados()[0].error, /No tienes permiso/); assert.deepEqual(estado.escrituras, [['delete', 'pagos', 'b']])
+estado.rechazar = null; d3.reintentarRechazo(0); await espera(50)
+assert.equal(d3.rechazados().length, 1); assert.equal(estado.escrituras.at(-1)[2].id, nuevo)
+d3.descartarRechazo(0); assert.equal(d3.rechazados().length, 0)
+// todo queda guardado en el equipo: otra instancia (la app reabierta) ve cola, rechazos y conflictos
+estado.red = false; await d3.guardar('pagos', { id: 'c', sede: 'Sur', valor: 4 })
+const d4 = crearDatos({ url: 'https://sin-red.supabase.co', clave: 'x' }); await d4.listo
+assert.equal(d4.pendientes(), 1); assert.equal(d4.cola()[0].fila.id, 'c')
+estado.red = true; parar3()
+parar(); console.log('datos-en-vivo: ok (filtro, orden, insert/update/delete en vivo, copia local, cola, conexión, sesión, sin internet: precarga, cambios visibles al instante, orden, rechazos, persistencia)')
